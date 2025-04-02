@@ -87,12 +87,9 @@ func (m *Model) PostTokenize(inputs []input.Input) ([]input.Input, error) {
 	windowSize := 112
 
 	// Calculate grid dimensions
-	// The total patches per dimension = window_size / patch_size
 	patchesPerDim := windowSize / patchSize
-	// Grid size after merging = patches per dimension / merge_size
 	gridSize := patchesPerDim / mergeSize
 
-	// Calculate tokens per grid
 	tokensPerGrid := gridSize * gridSize
 
 	for _, inp := range inputs {
@@ -115,7 +112,7 @@ func (m *Model) PostTokenize(inputs []input.Input) ([]input.Input, error) {
 				})
 
 			// Then add the placeholder tokens for the remaining positions
-			// We subtract 1 from tokensPerGrid because we already added the first token
+			// Subtract 1 from tokensPerGrid because we already added the first token
 			placeholders := tokensPerGrid - 1
 			for range int(placeholders) {
 				result = append(result, input.Input{Token: int32(imageToken)})
