@@ -13,7 +13,7 @@ import (
 type Model struct {
 	model.Base
 	*TextModel
-	// *VisionModel         `gguf:"v,vision"`
+	*VisionModel `gguf:"v,vision"`
 
 	ImageProcessor
 }
@@ -23,8 +23,8 @@ var _ model.MultimodalProcessor = (*Model)(nil)
 
 func New(c ml.Config) (model.Model, error) {
 	m := &Model{
-		TextModel: NewTextModel(c),
-		// VisionModel:         newVisionModel(c),
+		TextModel:      NewTextModel(c),
+		VisionModel:    newVisionModel(c),
 		ImageProcessor: newImageProcessor(c),
 	}
 
@@ -34,9 +34,9 @@ func New(c ml.Config) (model.Model, error) {
 }
 
 func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) (any, error) {
-	// if len(m.VisionModel.Layers) == 0 {
-	// 	return nil, model.ErrNoVisionModel
-	// }
+	if len(m.VisionModel.Layers) == 0 {
+		return nil, model.ErrNoVisionModel
+	}
 
 	image, _, err := image.Decode(bytes.NewReader(multimodalData))
 	if err != nil {
@@ -48,7 +48,7 @@ func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) (any, er
 		return nil, err
 	}
 
-	_, err = ctx.Input().FromFloatSlice(f32s,
+	pixelValues, err := ctx.Input().FromFloatSlice(f32s,
 		m.ImageProcessor.imageSize,
 		m.ImageProcessor.imageSize,
 		m.ImageProcessor.numChannels,
@@ -57,10 +57,8 @@ func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) (any, er
 		return nil, err
 	}
 
-	return nil, nil
-
-	// visionOutputs := m.VisionModel.Forward(ctx, pixelValues)
-	// return visionOutputs, nil
+	visionOutputs := m.VisionModel.Forward(ctx, pixelValues)
+	return visionOutputs, nil
 }
 
 // PostTokenize arranges Qwen-2.5-VL's inputs for the forward pass
