@@ -14,7 +14,6 @@ type Model struct {
 	model.Base
 	*TextModel
 	// *VisionModel         `gguf:"v,vision"`
-	// *MultiModalProjector `gguf:"mm"`
 
 	ImageProcessor
 }
@@ -27,7 +26,6 @@ func New(c ml.Config) (model.Model, error) {
 		TextModel: NewTextModel(c),
 		// VisionModel:         newVisionModel(c),
 		ImageProcessor: newImageProcessor(c),
-		// MultiModalProjector: newMultiModalProjector(c),
 	}
 
 	m.Cache = kvcache.NewCausalCache(m.TextModel.Shift)
@@ -62,7 +60,6 @@ func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) (any, er
 	return nil, nil
 
 	// visionOutputs := m.VisionModel.Forward(ctx, pixelValues)
-	// visionOutputs = m.MultiModalProjector.Forward(ctx, visionOutputs, m.imageSize, m.patchSize, m.VisionModel.eps)
 	// return visionOutputs, nil
 }
 
