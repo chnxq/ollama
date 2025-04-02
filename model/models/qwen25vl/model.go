@@ -1,6 +1,10 @@
 package qwen25vl
 
 import (
+	"bytes"
+	"fmt"
+	"image"
+
 	"github.com/ollama/ollama/kvcache"
 	"github.com/ollama/ollama/ml"
 	"github.com/ollama/ollama/model"
@@ -13,7 +17,7 @@ type Model struct {
 	// *VisionModel         `gguf:"v,vision"`
 	// *MultiModalProjector `gguf:"mm"`
 
-	// ImageProcessor
+	ImageProcessor
 }
 
 // Implement MultimodalProcessor interface
@@ -23,7 +27,7 @@ func New(c ml.Config) (model.Model, error) {
 	m := &Model{
 		TextModel: NewTextModel(c),
 		// VisionModel:         newVisionModel(c),
-		// ImageProcessor:      newImageProcessor(c),
+		ImageProcessor: newImageProcessor(c),
 		// MultiModalProjector: newMultiModalProjector(c),
 	}
 
@@ -33,12 +37,102 @@ func New(c ml.Config) (model.Model, error) {
 }
 
 func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) (any, error) {
+	// if len(m.VisionModel.Layers) == 0 {
+	// 	return nil, model.ErrNoVisionModel
+	// }
+
+	image, _, err := image.Decode(bytes.NewReader(multimodalData))
+	if err != nil {
+		return nil, err
+	}
+
+	f32s, err := m.ImageProcessor.ProcessImage(image)
+	if err != nil {
+		return nil, err
+	}
+
+	pixelValues, err := ctx.Input().FromFloatSlice(f32s,
+		m.ImageProcessor.imageSize,
+		m.ImageProcessor.imageSize,
+		m.ImageProcessor.numChannels,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	fmt.Println("pixelValues", pixelValues)
+
 	return nil, nil
+
+	// visionOutputs := m.VisionModel.Forward(ctx, pixelValues)
+	// visionOutputs = m.MultiModalProjector.Forward(ctx, visionOutputs, m.imageSize, m.patchSize, m.VisionModel.eps)
+	// return visionOutputs, nil
 }
 
 // PostTokenize arranges Qwen-2.5-VL's inputs for the forward pass
 func (m *Model) PostTokenize(inputs []input.Input) ([]input.Input, error) {
-	return inputs, nil
+	var result []input.Input
+
+	// Get image token IDs from config
+	// imageToken := m.Config.Uint("image_token_id")
+	// visionStartToken := m.Config.Uint("vision_start_token_id")
+	// visionEndToken := m.Config.Uint("vision_end_token_id")
+	imageToken := 151655
+	visionStartToken := 151652
+	visionEndToken := 151653
+
+	// Get merge size from vision config
+	// mergeSize := m.Config.Uint("vision_config.spatial_merge_size")
+	// patchSize := m.Config.Uint("vision_config.spatial_patch_size")
+	// windowSize := m.Config.Uint("vision_config.window_size")
+	mergeSize := 2
+	patchSize := 14
+	windowSize := 112
+
+	// Calculate grid dimensions
+	// The total patches per dimension = window_size / patch_size
+	patchesPerDim := windowSize / patchSize
+	// Grid size after merging = patches per dimension / merge_size
+	gridSize := patchesPerDim / mergeSize
+
+	// Calculate tokens per grid
+	tokensPerGrid := gridSize * gridSize
+
+	for _, inp := range inputs {
+		if inp.Multimodal == nil {
+			// If not a multimodal input, add it to the result unchanged
+			result = append(result, inp)
+		} else if inp.Token == int32(imageToken) {
+			// This is an image token
+			inputMultimodal := inp.Multimodal.(ml.Tensor)
+
+			// Replace the image token with multiple placeholder tokens
+			// First add the vision start token
+			result = append(result, input.Input{Token: int32(visionStartToken)})
+
+			// Then add the multimodal tensor data at the first position
+			result = append(result,
+				input.Input{
+					Multimodal:     inputMultimodal,
+					MultimodalHash: inp.MultimodalHash,
+				})
+
+			// Then add the placeholder tokens for the remaining positions
+			// We subtract 1 from tokensPerGrid because we already added the first token
+			placeholders := tokensPerGrid - 1
+			for range int(placeholders) {
+				result = append(result, input.Input{Token: int32(imageToken)})
+			}
+
+			// Finally add the vision end token
+			result = append(result, input.Input{Token: int32(visionEndToken)})
+		} else {
+			// For any other token, just pass through
+			result = append(result, inp)
+		}
+	}
+
+	return result, nil
 }
 
 func (m *Model) Forward(ctx ml.Context, batch input.Batch) (ml.Tensor, error) {
