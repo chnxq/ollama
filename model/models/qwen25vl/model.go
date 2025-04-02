@@ -2,7 +2,6 @@ package qwen25vl
 
 import (
 	"bytes"
-	"fmt"
 	"image"
 
 	"github.com/ollama/ollama/kvcache"
@@ -51,7 +50,7 @@ func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) (any, er
 		return nil, err
 	}
 
-	pixelValues, err := ctx.Input().FromFloatSlice(f32s,
+	_, err = ctx.Input().FromFloatSlice(f32s,
 		m.ImageProcessor.imageSize,
 		m.ImageProcessor.imageSize,
 		m.ImageProcessor.numChannels,
@@ -59,8 +58,6 @@ func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) (any, er
 	if err != nil {
 		return nil, err
 	}
-
-	fmt.Println("pixelValues", pixelValues)
 
 	return nil, nil
 
