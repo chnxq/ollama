@@ -119,7 +119,7 @@ struct llama_grammar_parser {
 struct llama_grammar {
     // note: allow null vocab for testing (not great)
     const llama_vocab * vocab;
-    ollama_vocab * ollama_vocab;
+    ollama_vocab * o_vocab;
 
     const llama_grammar_rules  rules;  // TODO: shared ptr
           llama_grammar_stacks stacks;
