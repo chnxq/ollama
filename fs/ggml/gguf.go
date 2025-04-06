@@ -542,6 +542,7 @@ func WriteGGUF(ws io.WriteSeeker, kv KV, ts []Tensor) error {
 	})
 
 	var s uint64
+	var alignment int64 = 32
 	for _, t := range ts {
 		t.Offset = s
 		if err := ggufWriteTensorInfo(ws, t); err != nil {
@@ -550,7 +551,6 @@ func WriteGGUF(ws io.WriteSeeker, kv KV, ts []Tensor) error {
 		s += t.Size()
 	}
 
-	var alignment int64 = 32
 	for _, t := range ts {
 		if err := ggufWriteTensor(ws, t, alignment); err != nil {
 			return err
@@ -657,5 +657,9 @@ func ggufWriteTensor(ws io.WriteSeeker, t Tensor, alignment int64) error {
 }
 
 func ggufPadding(offset, align int64) int64 {
+	// if we already fit perfectly onto a 16 byte boundary, don't bother padding
+	if ((align-offset%align)%align)%16 == 0 {
+		return 0
+	}
 	return (align - offset%align) % align
 }
