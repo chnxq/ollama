@@ -24,8 +24,9 @@ type qwen25vlModel struct {
 	NumKeyValueHeads      uint32  `json:"num_key_value_heads"`
 	RMSNormEPS            float32 `json:"rms_norm_eps"`
 
-	VisionModel struct {
-	} `json:"vision_config"`
+	// VisionModel struct {
+	// 	Depth uint32 `json:"depth"`
+	// } `json:"vision_config"`
 }
 
 var _ ModelConverter = (*qwen25vlModel)(nil)
@@ -42,6 +43,8 @@ func (q *qwen25vlModel) KV(t *Tokenizer) ggml.KV {
 	kv["qwen25vl.rope.freq_base"] = q.RopeTheta
 	kv["qwen25vl.attention.layer_norm_rms_epsilon"] = q.RMSNormEPS
 
+	// kv["qwen25vl.vision.block_count"] = q.VisionModel.Depth
+
 	return kv
 }
 
@@ -50,10 +53,14 @@ func (q *qwen25vlModel) Tensors(ts []Tensor) []ggml.Tensor {
 
 	for _, t := range ts {
 		if strings.HasSuffix(t.Name(), "patch_embed.proj.weight") {
-			var buf bytes.Buffer
-			t.WriteTo(&buf)
-			newTensors := splitPatchEmbed(buf, t.Kind(), t.Shape())
-			out = append(out, newTensors...)
+			// var buf bytes.Buffer
+			// if _, err := t.WriteTo(&buf); err != nil {
+			// 	panic(err)
+			// }
+			// newTensors := splitPatchEmbed(buf, t.Kind(), t.Shape())
+			// out = append(out, newTensors...)
+			// } else if strings.HasPrefix(t.Name(), "v.blk.") {
+			// skip
 		} else {
 			out = append(out, ggml.Tensor{
 				Name:     t.Name(),

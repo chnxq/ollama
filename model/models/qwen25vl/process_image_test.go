@@ -14,7 +14,7 @@ func TestSmartResize(t *testing.T) {
 
 	// Create an image processor with default values
 	processor := ImageProcessor{
-		imageSize:   224, // Example value
+		imageSize:   560, // Example value
 		numChannels: 3,
 		factor:      28,
 		minPixels:   56 * 56,
@@ -53,7 +53,7 @@ func TestProcessImage(t *testing.T) {
 
 	// Create an image processor with default values
 	processor := ImageProcessor{
-		imageSize:   224, // Example value
+		imageSize:   560, // Example value
 		numChannels: 3,
 		factor:      28,
 		minPixels:   56 * 56,

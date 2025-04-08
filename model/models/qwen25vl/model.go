@@ -2,10 +2,13 @@ package qwen25vl
 
 import (
 	"bytes"
+	"fmt"
 	"image"
 
+	"github.com/ollama/ollama/fs"
 	"github.com/ollama/ollama/kvcache"
 	"github.com/ollama/ollama/ml"
+	"github.com/ollama/ollama/ml/nn"
 	"github.com/ollama/ollama/model"
 	"github.com/ollama/ollama/model/input"
 )
@@ -14,6 +17,7 @@ type Model struct {
 	model.Base
 	*TextModel
 	*VisionModel `gguf:"v,vision"`
+	*PatchMerger `gguf:"mm"`
 
 	ImageProcessor
 }
@@ -21,7 +25,28 @@ type Model struct {
 // Implement MultimodalProcessor interface
 var _ model.MultimodalProcessor = (*Model)(nil)
 
-func New(c ml.Config) (model.Model, error) {
+type PatchMerger struct {
+	HiddenSize int
+	// LNQ        *nn.RMSNorm `gguf:"post_ln"`
+	MLPLayer1 *nn.Linear `gguf:"0"`
+	MLPLayer2 *nn.Linear `gguf:"1"`
+}
+
+func (p *PatchMerger) Forward(ctx ml.Context, visionOutputs ml.Tensor, eps float32) ml.Tensor {
+	// Apply RMSNorm first
+	// fmt.Print(p.LNQ)
+	// normed := p.LNQ.Forward(ctx, visionOutputs, eps)
+
+	// Apply first linear layer (mm.0)
+	hidden := p.MLPLayer1.Forward(ctx, visionOutputs)
+	// Apply GELU activation
+	activated := hidden.GELU(ctx)
+	// Apply second linear layer (mm.2)
+	output := p.MLPLayer2.Forward(ctx, activated)
+	return output
+}
+
+func New(c fs.Config) (model.Model, error) {
 	m := &Model{
 		TextModel:      NewTextModel(c),
 		VisionModel:    newVisionModel(c),
@@ -43,7 +68,7 @@ func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) (any, er
 		return nil, err
 	}
 
-	f32s, err := m.ImageProcessor.ProcessImage(image)
+	f32s, _, err := m.ImageProcessor.ProcessImage(image)
 	if err != nil {
 		return nil, err
 	}
@@ -54,10 +79,11 @@ func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) (any, er
 		m.ImageProcessor.numChannels,
 	)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to create tensor from image: %w", err)
 	}
 
 	visionOutputs := m.VisionModel.Forward(ctx, pixelValues)
+	visionOutputs = m.PatchMerger.Forward(ctx, visionOutputs, m.VisionModel.eps)
 	return visionOutputs, nil
 }
 

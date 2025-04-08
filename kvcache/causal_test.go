@@ -561,7 +561,6 @@ func (t *testTensor) Tanh(ctx ml.Context) ml.Tensor {
 
 func (t *testTensor) Cos(ctx ml.Context) ml.Tensor  { panic("not implemented") }
 func (t *testTensor) Sin(ctx ml.Context) ml.Tensor  { panic("not implemented") }
-func (t *testTensor) Tanh(ctx ml.Context) ml.Tensor { panic("not implemented") }
 func (t *testTensor) GELU(ctx ml.Context) ml.Tensor { panic("not implemented") }
 func (t *testTensor) SILU(ctx ml.Context) ml.Tensor { panic("not implemented") }
 
