@@ -1,7 +1,6 @@
 package qwen25vl
 
 import (
-	"fmt"
 	"math"
 
 	"github.com/ollama/ollama/fs"
@@ -75,9 +74,6 @@ type SelfAttention struct {
 }
 
 func (sa *SelfAttention) Forward(ctx ml.Context, hiddenState, positionIDs ml.Tensor, cache kvcache.Cache, opts *TextOptions) ml.Tensor {
-	// fmt.Println(ml.Dump(ctx, sa.Query.Weight))
-	// fmt.Println(ml.Dump(ctx, sa.Query.Bias))
-
 	batchSize := hiddenState.Dim(1)
 	headDim := opts.hiddenSize / opts.numHeads
 
@@ -149,8 +145,6 @@ func (l *Layer) Forward(ctx ml.Context, hiddenState, positionIDs, outputs ml.Ten
 }
 
 func (m *TextModel) Forward(ctx ml.Context, inputs, positions, outputs ml.Tensor, batch input.Batch, cache kvcache.Cache) (ml.Tensor, error) {
-	fmt.Println(ml.Dump(ctx, m.OutputNorm.Weight))
-
 	// Initial token embedding
 	hiddenState := m.TokenEmbedding.Forward(ctx, inputs)
 

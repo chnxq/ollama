@@ -24,19 +24,11 @@ type ImageProcessor struct {
 	imageStd          []float32
 }
 
-// debugLog is a helper function to conditionally log debug messages
-func debugLog(msg string, args ...interface{}) {
-	fmt.Printf(msg+"\n", args...)
-}
-
 // newImageProcessor creates a new image processor with default values
 func newImageProcessor(c fs.Config) ImageProcessor {
 
 	patchSize := int(c.Uint("vision.patch_size", 14))
 	mergeSize := int(c.Uint("vision.spatial_merge_size", 2))
-
-	debugLog("Creating new ImageProcessor with configuration:")
-	debugLog("  patchSize=%d, mergeSize=%d", patchSize, mergeSize)
 
 	return ImageProcessor{
 		imageSize:         int(c.Uint("vision.image_size", 560)),
@@ -55,9 +47,6 @@ func newImageProcessor(c fs.Config) ImageProcessor {
 
 // SmartResize implements the smart resize algorithm from the Python implementation
 func (p *ImageProcessor) SmartResize(height, width int) (int, int) {
-	debugLog("SmartResize input: height=%d, width=%d, factor=%d", height, width, p.factor)
-	debugLog("Min pixels: %d, Max pixels: %d", p.minPixels, p.maxPixels)
-
 	factor := p.factor
 
 	if height < factor || width < factor {
@@ -71,28 +60,19 @@ func (p *ImageProcessor) SmartResize(height, width int) (int, int) {
 
 	hBar := round(float64(height)/float64(factor)) * factor
 	wBar := round(float64(width)/float64(factor)) * factor
-	debugLog("Initial rounded dims: h_bar=%d, w_bar=%d (total pixels: %d)", hBar, wBar, hBar*wBar)
 
 	if hBar*wBar > p.maxPixels {
-		debugLog("Image too large (%d > %d), scaling down", hBar*wBar, p.maxPixels)
 		beta := math.Sqrt(float64(height*width) / float64(p.maxPixels))
-		debugLog("Scale factor beta: %f", beta)
 
 		hBar = int(math.Floor(float64(height)/beta/float64(factor))) * factor
 		wBar = int(math.Floor(float64(width)/beta/float64(factor))) * factor
-		debugLog("Scaled down dims: h_bar=%d, w_bar=%d (total pixels: %d)", hBar, wBar, hBar*wBar)
 	} else if hBar*wBar < p.minPixels {
-		debugLog("Image too small (%d < %d), scaling up", hBar*wBar, p.minPixels)
 		beta := math.Sqrt(float64(p.minPixels) / float64(height*width))
-		debugLog("Scale factor beta: %f", beta)
 
 		hBar = int(math.Ceil(float64(height)*beta/float64(factor))) * factor
 		wBar = int(math.Ceil(float64(width)*beta/float64(factor))) * factor
-		debugLog("Scaled up dims: h_bar=%d, w_bar=%d (total pixels: %d)", hBar, wBar, hBar*wBar)
 	}
 
-	debugLog("Final dimensions: h_bar=%d, w_bar=%d, total pixels=%d", hBar, wBar, hBar*wBar)
-	debugLog("Each dimension divisible by %d: height=%v, width=%v", factor, hBar%factor == 0, wBar%factor == 0)
 	return hBar, wBar
 }
 
@@ -119,7 +99,6 @@ func round(x float64) int {
 
 // ProcessImage processes an image for the Qwen 2.5 VL model using a C++-like approach
 func (p *ImageProcessor) ProcessImage(img image.Image) ([]float32, []int, error) {
-	debugLog("Processing image: %dx%d", img.Bounds().Dx(), img.Bounds().Dy())
 
 	// Get original dimensions
 	origWidth := img.Bounds().Dx()
@@ -129,7 +108,6 @@ func (p *ImageProcessor) ProcessImage(img image.Image) ([]float32, []int, error)
 	resizedHeight, resizedWidth := p.SmartResize(origHeight, origWidth)
 
 	// Resize image using existing functions
-	debugLog("Converting and resizing image to %dx%d", resizedWidth, resizedHeight)
 	resizedImg := imageproc.Resize(img, image.Point{X: resizedWidth, Y: resizedHeight}, imageproc.ResizeBilinear)
 
 	// Normalize the image (use existing code)
@@ -147,29 +125,24 @@ func (p *ImageProcessor) ProcessImage(img image.Image) ([]float32, []int, error)
 	gridW := resizedWidth / p.patchSize
 	gridT := 1 // For single images, temporal dimension is 1
 
-	debugLog("Grid dimensions: grid_h=%d, grid_w=%d, grid_t=%d", gridH, gridW, gridT)
-	debugLog("Grid h divisible by merge_size: %v", gridH%p.mergeSize == 0)
-	debugLog("Grid w divisible by merge_size: %v", gridW%p.mergeSize == 0)
-
 	// Create patches directly - similar to C++ approach
-	patches, err := p.createPatchesCppStyle(normalizedPixels, resizedHeight, resizedWidth, gridH, gridW, gridT)
+	patches, err := p.createPatches(normalizedPixels, resizedHeight, resizedWidth, gridH, gridW, gridT)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to create patches: %v", err)
 	}
 
 	// Create metadata array (same as in the Python and C++ code)
 	gridTHW := []int{gridT, gridH, gridW}
-	debugLog("Grid THW metadata: %v", gridTHW)
 
-	debugLog("Successfully processed image to tensor of shape (%d, %d)",
+	// TODO: remove this
+	fmt.Println("Successfully processed image to tensor of shape [",
 		len(patches)/p.patchSize/p.patchSize/p.numChannels/p.temporalPatchSize,
-		p.patchSize*p.patchSize*p.numChannels*p.temporalPatchSize)
+		p.patchSize*p.patchSize*p.numChannels*p.temporalPatchSize, "]")
 
 	return patches, gridTHW, nil
 }
 
-// createPatchesCppStyle creates patches in a format similar to the C++ implementation
-func (p *ImageProcessor) createPatchesCppStyle(pixels []float32, height, width, gridH, gridW, gridT int) ([]float32, error) {
+func (p *ImageProcessor) createPatches(pixels []float32, height, width, gridH, gridW, gridT int) ([]float32, error) {
 	channels := p.numChannels
 	patchSize := p.patchSize
 	mergeSize := p.mergeSize
@@ -186,7 +159,6 @@ func (p *ImageProcessor) createPatchesCppStyle(pixels []float32, height, width, 
 	// in the format expected by the forward pass
 	patchIndex := 0
 
-	// Following the approach in the C++ code (clip_image_build_graph_legacy)
 	for t := 0; t < gridT; t++ {
 		// For each patch in the grid
 		for h := 0; h < gridH; h += mergeSize {
@@ -253,6 +225,5 @@ func (p *ImageProcessor) createPatchesCppStyle(pixels []float32, height, width, 
 		}
 	}
 
-	// This now should match the expected memory layout from the C++ version
 	return result, nil
 }

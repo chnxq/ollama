@@ -25,27 +25,10 @@ func (sa *VisionSelfAttention) Forward(ctx ml.Context, hiddenStates ml.Tensor, p
 	key := sa.Key.Forward(ctx, hiddenStates)
 	value := sa.Value.Forward(ctx, hiddenStates)
 
-	// Add debug prints for query dimensions
-	fmt.Printf("DEBUG: query dimensions before reshape: %v\n",
-		[]int{query.Dim(0), query.Dim(1), query.Dim(2), query.Dim(3)})
-
 	query = query.Reshape(ctx, opts.headDim, opts.numHeads, query.Dim(1), batchSize)
 	key = key.Reshape(ctx, opts.headDim, opts.numHeads, key.Dim(1), batchSize)
 	value = value.Reshape(ctx, opts.headDim, opts.numHeads, value.Dim(1), batchSize)
 
-	// Add debug prints after reshape
-	fmt.Printf("DEBUG: query dimensions after reshape: %v\n",
-		[]int{query.Dim(0), query.Dim(1), query.Dim(2), query.Dim(3)})
-
-	// Check if positionIDs is a vector with expected dimensions
-	numPositions := query.Dim(2)
-	expectedPosIDLen := numPositions * 4 // 4 position IDs per token as required by mrope
-
-	// Debug print expected vs actual dimensions
-	fmt.Printf("DEBUG: Expected positionIDs length: %d, Actual: %d\n",
-		expectedPosIDLen, positionIDs.Dim(0))
-
-	// Apply rotary embeddings using RoPEMulti
 	config := ml.RoPEConfig{
 		Dim:        uint32(opts.headDim / 2),
 		Type:       ml.RopeTypeMRoPE,
@@ -53,10 +36,6 @@ func (sa *VisionSelfAttention) Forward(ctx ml.Context, hiddenStates ml.Tensor, p
 		Scale:      1.0,
 		YarnConfig: ml.DefaultYarnConfig(128000),
 	}
-
-	// Ensure positionIDs is a proper 1D vector of int32 with correct length
-	// This is likely where you need to fix your code
-	fmt.Printf("DEBUG: About to call RoPEMulti\n")
 
 	query = query.RoPEMulti(
 		ctx,
@@ -154,10 +133,6 @@ func (pe *VisionPatchEmbedding) Forward(ctx ml.Context, pixelValues ml.Tensor, p
 	patchesH := pixelValues.Dim(0) / patchSize
 	patchesW := pixelValues.Dim(1) / patchSize
 	hiddenSize := embeddings0.Dim(2) // The channel dimension after convolution
-
-	// Print initial dimensions for debugging
-	fmt.Printf("Initial embeddings shape: [%d, %d, %d, %d]\n",
-		embeddings.Dim(0), embeddings.Dim(1), embeddings.Dim(2), embeddings.Dim(3))
 
 	// Permute: [patchesW, patchesH, hiddenSize, batchSize] -> [hiddenSize, patchesW, patchesH, batchSize]
 	embeddings = embeddings.Permute(ctx, 2, 0, 1, 3).Contiguous(ctx)
@@ -258,12 +233,8 @@ func (m *VisionModel) Forward(ctx ml.Context, pixelValues ml.Tensor) ml.Tensor {
 		panic(err)
 	}
 
-	fmt.Printf("DEBUG: Created positionIDs with length: %d for %d patches\n",
-		positionIDs.Dim(0), numPatches)
-
 	// Apply encoder layers
-	for i, layer := range m.Layers {
-		fmt.Printf("Processing Layer %d\n", i)
+	for _, layer := range m.Layers {
 		hiddenStates = layer.Forward(ctx, hiddenStates, positionIDs, m.VisionModelOptions)
 	}
 
