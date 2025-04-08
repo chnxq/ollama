@@ -27,18 +27,18 @@ var _ model.MultimodalProcessor = (*Model)(nil)
 
 type PatchMerger struct {
 	HiddenSize int
-	// LNQ        *nn.RMSNorm `gguf:"post_ln"`
-	MLPLayer1 *nn.Linear `gguf:"0"`
-	MLPLayer2 *nn.Linear `gguf:"1"`
+	LNQ        *nn.RMSNorm `gguf:"post_ln"`
+	MLPLayer1  *nn.Linear  `gguf:"0"`
+	MLPLayer2  *nn.Linear  `gguf:"1"`
 }
 
 func (p *PatchMerger) Forward(ctx ml.Context, visionOutputs ml.Tensor, eps float32) ml.Tensor {
 	// Apply RMSNorm first
 	// fmt.Print(p.LNQ)
-	// normed := p.LNQ.Forward(ctx, visionOutputs, eps)
+	normed := p.LNQ.Forward(ctx, visionOutputs, eps)
 
 	// Apply first linear layer (mm.0)
-	hidden := p.MLPLayer1.Forward(ctx, visionOutputs)
+	hidden := p.MLPLayer1.Forward(ctx, normed)
 	// Apply GELU activation
 	activated := hidden.GELU(ctx)
 	// Apply second linear layer (mm.2)
