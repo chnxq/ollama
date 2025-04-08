@@ -137,10 +137,6 @@ func (pe *VisionPatchEmbedding) Forward(ctx ml.Context, pixelValues ml.Tensor, p
 	// Permute: [patchesW, patchesH, hiddenSize, batchSize] -> [hiddenSize, patchesW, patchesH, batchSize]
 	embeddings = embeddings.Permute(ctx, 2, 0, 1, 3).Contiguous(ctx)
 
-	// Print after permute
-	fmt.Printf("After permute: [%d, %d, %d, %d]\n",
-		embeddings.Dim(0), embeddings.Dim(1), embeddings.Dim(2), embeddings.Dim(3))
-
 	// Reshape to combine patches in 2×2 groups
 	// We need to make sure patchesW and patchesH are both even
 	if patchesW%2 != 0 || patchesH%2 != 0 {
@@ -149,18 +145,12 @@ func (pe *VisionPatchEmbedding) Forward(ctx ml.Context, pixelValues ml.Tensor, p
 
 	// Reshape: [hiddenSize, patchesW, patchesH, batchSize] -> [hiddenSize*2, patchesW/2, patchesH, batchSize]
 	embeddings = embeddings.Reshape(ctx, hiddenSize*2, patchesW/2, patchesH, batchSize)
-	fmt.Printf("After first reshape: [%d, %d, %d, %d]\n",
-		embeddings.Dim(0), embeddings.Dim(1), embeddings.Dim(2), embeddings.Dim(3))
 
 	// Reshape: [hiddenSize*2, patchesW/2, patchesH, batchSize] -> [hiddenSize*2, patchesW/2, 2, patchesH/2*batchSize]
 	embeddings = embeddings.Reshape(ctx, hiddenSize*2, patchesW/2, 2, patchesH/2*batchSize)
-	fmt.Printf("After second reshape: [%d, %d, %d, %d]\n",
-		embeddings.Dim(0), embeddings.Dim(1), embeddings.Dim(2), embeddings.Dim(3))
 
 	// Permute: [hiddenSize*2, patchesW/2, 2, patchesH/2*batchSize] -> [hiddenSize*2, 2, patchesW/2, patchesH/2*batchSize]
 	embeddings = embeddings.Permute(ctx, 0, 2, 1, 3).Contiguous(ctx)
-	fmt.Printf("After second permute: [%d, %d, %d, %d]\n",
-		embeddings.Dim(0), embeddings.Dim(1), embeddings.Dim(2), embeddings.Dim(3))
 
 	// Final reshape: [hiddenSize*2, 2, patchesW/2, patchesH/2*batchSize] -> [hiddenSize, patchesW*patchesH/4, batchSize]
 	// This is an important step - it merges adjacent patches, reducing the sequence length by a factor of 4

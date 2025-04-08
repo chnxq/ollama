@@ -72,12 +72,13 @@ func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) (any, er
 		return nil, err
 	}
 
-	f32s, _, err := m.ImageProcessor.ProcessImage(image)
+	f32s, err := m.ImageProcessor.ProcessImage(image)
 	if err != nil {
 		return nil, err
 	}
 
-	fmt.Println("f32s:", f32s[:10])
+	// TODO: this is slightly off from the python version, but it should be ok
+	// fmt.Println("f32s:", f32s[:10], "...", f32s[len(f32s)-10:])
 
 	pixelValues, err := ctx.Input().FromFloatSlice(f32s,
 		m.ImageProcessor.imageSize,
@@ -89,6 +90,7 @@ func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) (any, er
 	}
 
 	visionOutputs := m.VisionModel.Forward(ctx, pixelValues)
+	fmt.Println(ml.Dump(ctx, visionOutputs))
 	visionOutputs = m.PatchMerger.Forward(ctx, visionOutputs, m.VisionModel.eps)
 	return visionOutputs, nil
 }

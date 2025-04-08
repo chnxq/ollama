@@ -45,19 +45,20 @@ func newImageProcessor(c fs.Config) ImageProcessor {
 	}
 }
 
-// SmartResize implements the smart resize algorithm from the Python implementation
+// SmartResize implements the smart resize algorithm
 func (p *ImageProcessor) SmartResize(height, width int) (int, int) {
 	factor := p.factor
 
 	if height < factor || width < factor {
-		errMsg := fmt.Sprintf("height:%d or width:%d must be larger than factor:%d", height, width, factor)
-		panic(errMsg)
+		panic(fmt.Sprintf("height:%d or width:%d must be larger than factor:%d", height, width, factor))
 	} else if float64(max(height, width))/float64(min(height, width)) > 200 {
 		aspectRatio := float64(max(height, width)) / float64(min(height, width))
-		errMsg := fmt.Sprintf("absolute aspect ratio must be smaller than 200, got %f", aspectRatio)
-		panic(errMsg)
+		panic(fmt.Sprintf("absolute aspect ratio must be smaller than 200, got %f", aspectRatio))
 	}
 
+	round := func(x float64) int {
+		return int(math.Round(x))
+	}
 	hBar := round(float64(height)/float64(factor)) * factor
 	wBar := round(float64(width)/float64(factor)) * factor
 
@@ -76,29 +77,7 @@ func (p *ImageProcessor) SmartResize(height, width int) (int, int) {
 	return hBar, wBar
 }
 
-// min returns the minimum of two integers
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-// max returns the maximum of two integers
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-// round implements the Python round function
-func round(x float64) int {
-	return int(math.Round(x))
-}
-
-// ProcessImage processes an image for the Qwen 2.5 VL model using a C++-like approach
-func (p *ImageProcessor) ProcessImage(img image.Image) ([]float32, []int, error) {
+func (p *ImageProcessor) ProcessImage(img image.Image) ([]float32, error) {
 
 	// Get original dimensions
 	origWidth := img.Bounds().Dx()
@@ -125,21 +104,13 @@ func (p *ImageProcessor) ProcessImage(img image.Image) ([]float32, []int, error)
 	gridW := resizedWidth / p.patchSize
 	gridT := 1 // For single images, temporal dimension is 1
 
-	// Create patches directly - similar to C++ approach
+	// Create patches directly
 	patches, err := p.createPatches(normalizedPixels, resizedHeight, resizedWidth, gridH, gridW, gridT)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create patches: %v", err)
+		return nil, fmt.Errorf("failed to create patches: %v", err)
 	}
 
-	// Create metadata array (same as in the Python and C++ code)
-	gridTHW := []int{gridT, gridH, gridW}
-
-	// TODO: remove this
-	fmt.Println("Successfully processed image to tensor of shape [",
-		len(patches)/p.patchSize/p.patchSize/p.numChannels/p.temporalPatchSize,
-		p.patchSize*p.patchSize*p.numChannels*p.temporalPatchSize, "]")
-
-	return patches, gridTHW, nil
+	return patches, nil
 }
 
 func (p *ImageProcessor) createPatches(pixels []float32, height, width, gridH, gridW, gridT int) ([]float32, error) {
