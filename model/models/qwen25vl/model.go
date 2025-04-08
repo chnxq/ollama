@@ -26,23 +26,27 @@ type Model struct {
 var _ model.MultimodalProcessor = (*Model)(nil)
 
 type PatchMerger struct {
-	HiddenSize int
-	LNQ        *nn.RMSNorm `gguf:"post_ln"`
-	MLPLayer1  *nn.Linear  `gguf:"0"`
-	MLPLayer2  *nn.Linear  `gguf:"1"`
+	MLPLayer1 *nn.Linear `gguf:"0"`
+	MLPLayer2 *nn.Linear `gguf:"2"`
 }
 
-func (p *PatchMerger) Forward(ctx ml.Context, visionOutputs ml.Tensor, eps float32) ml.Tensor {
-	// Apply RMSNorm first
-	// fmt.Print(p.LNQ)
-	normed := p.LNQ.Forward(ctx, visionOutputs, eps)
+// Forward computes patch merging for the vision model
+func (pm *PatchMerger) Forward(ctx ml.Context, visionOutputs ml.Tensor, eps float32) ml.Tensor {
+	// Get dimensions
+	hiddenSize := visionOutputs.Dim(0)
+	numPositions := visionOutputs.Dim(1)
+	batchSize := visionOutputs.Dim(2)
 
-	// Apply first linear layer (mm.0)
-	hidden := p.MLPLayer1.Forward(ctx, normed)
-	// Apply GELU activation
+	reshaped := visionOutputs.Reshape(ctx, hiddenSize*4, numPositions/4, batchSize)
+
+	// Apply first linear layer (mm_0_w, mm_0_b)
+	hidden := pm.MLPLayer1.Forward(ctx, reshaped)
+
 	activated := hidden.GELU(ctx)
-	// Apply second linear layer (mm.2)
-	output := p.MLPLayer2.Forward(ctx, activated)
+
+	// Apply second linear layer (mm_1_w, mm_1_b)
+	output := pm.MLPLayer2.Forward(ctx, activated)
+
 	return output
 }
 
