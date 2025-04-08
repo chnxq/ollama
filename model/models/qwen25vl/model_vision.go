@@ -114,14 +114,13 @@ type VisionModelOptions struct {
 	outHiddenSize    int
 }
 
-// VisionPatchEmbedding implements patch embedding for the Qwen vision model
-type VisionPatchEmbedding struct {
+type PatchEmbedding struct {
 	PatchConv0 *nn.Conv2D `gguf:"patch_embd_0"`
 	PatchConv1 *nn.Conv2D `gguf:"patch_embd_1"`
 }
 
 // Forward computes patch embeddings for the vision model
-func (pe *VisionPatchEmbedding) Forward(ctx ml.Context, pixelValues ml.Tensor, patchSize int) ml.Tensor {
+func (pe *PatchEmbedding) Forward(ctx ml.Context, pixelValues ml.Tensor, patchSize int) ml.Tensor {
 	// Apply both 2D convolutions
 	embeddings0 := pe.PatchConv0.Forward(ctx, pixelValues, patchSize, patchSize, 0, 0, 1, 1)
 	embeddings1 := pe.PatchConv1.Forward(ctx, pixelValues, patchSize, patchSize, 0, 0, 1, 1)
@@ -137,7 +136,6 @@ func (pe *VisionPatchEmbedding) Forward(ctx ml.Context, pixelValues ml.Tensor, p
 	// Permute: [patchesW, patchesH, hiddenSize, batchSize] -> [hiddenSize, patchesW, patchesH, batchSize]
 	embeddings = embeddings.Permute(ctx, 2, 0, 1, 3).Contiguous(ctx)
 
-	// Reshape to combine patches in 2×2 groups
 	// We need to make sure patchesW and patchesH are both even
 	if patchesW%2 != 0 || patchesH%2 != 0 {
 		panic(fmt.Sprintf("Patch dimensions must be even: patchesW=%d, patchesH=%d", patchesW, patchesH))
@@ -152,13 +150,8 @@ func (pe *VisionPatchEmbedding) Forward(ctx ml.Context, pixelValues ml.Tensor, p
 	// Permute: [hiddenSize*2, patchesW/2, 2, patchesH/2*batchSize] -> [hiddenSize*2, 2, patchesW/2, patchesH/2*batchSize]
 	embeddings = embeddings.Permute(ctx, 0, 2, 1, 3).Contiguous(ctx)
 
-	// Final reshape: [hiddenSize*2, 2, patchesW/2, patchesH/2*batchSize] -> [hiddenSize, patchesW*patchesH/4, batchSize]
-	// This is an important step - it merges adjacent patches, reducing the sequence length by a factor of 4
-	embeddings = embeddings.Reshape(ctx, hiddenSize, patchesW*patchesH, batchSize)
-	fmt.Printf("Final embeddings shape: [%d, %d, %d]\n",
-		embeddings.Dim(0), embeddings.Dim(1), embeddings.Dim(2))
-
-	return embeddings
+	// Final reshape: [hiddenSize*2, 2, patchesW/2, patchesH/2*batchSize] -> [hiddenSize, patchesW*patchesH, batchSize]
+	return embeddings.Reshape(ctx, hiddenSize, patchesW*patchesH, batchSize)
 }
 
 // VisionPatchMerger implements patch merging for the Qwen vision model
@@ -183,7 +176,7 @@ func (pm *VisionPatchMerger) Forward(ctx ml.Context, x ml.Tensor, outDim, contex
 
 // VisionModel implements the Qwen vision model
 type VisionModel struct {
-	PatchEmbedding *VisionPatchEmbedding
+	PatchEmbedding *PatchEmbedding
 	Layers         []VisionEncoderLayer `gguf:"blk"`
 	PostLayerNorm  *nn.LayerNorm        `gguf:"post_ln"`
 	PatchMerger    *VisionPatchMerger   `gguf:"patch_merger"`
@@ -193,13 +186,13 @@ type VisionModel struct {
 
 // Forward computes the vision model for an input tensor
 func (m *VisionModel) Forward(ctx ml.Context, pixelValues ml.Tensor) ml.Tensor {
-	// Extract patch embeddings
-	hiddenStates := m.PatchEmbedding.Forward(ctx, pixelValues, m.patchSize)
-
 	// Calculate position IDs for 2D RoPE
 	numPatchesH := pixelValues.Dim(0) / m.patchSize
 	numPatchesW := pixelValues.Dim(1) / m.patchSize
 	numPatches := numPatchesH * numPatchesW
+
+	// Extract patch embeddings
+	hiddenStates := m.PatchEmbedding.Forward(ctx, pixelValues, m.patchSize)
 
 	// Create position IDs - for Qwen2VL mRoPE we need 4 values per position
 	// The format needed is specified in the C++ code as "mrope expecting 4 position ids per token"
