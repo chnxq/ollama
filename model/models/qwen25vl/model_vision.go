@@ -80,7 +80,8 @@ func (mlp *VisionMLP) Forward(ctx ml.Context, hiddenStates ml.Tensor, opts *Visi
 
 // VisionEncoderLayer implements an encoder layer for the Qwen vision model
 type VisionEncoderLayer struct {
-	AttentionNorm *nn.RMSNorm `gguf:"attn_norm"`
+	Norm1         *nn.RMSNorm `gguf:"ln1"`
+	Norm2         *nn.RMSNorm `gguf:"ln2"`
 	SelfAttention *VisionSelfAttention
 	MLP           *VisionMLP
 }
@@ -88,15 +89,13 @@ type VisionEncoderLayer struct {
 // Forward computes an encoder layer for the vision model
 func (e *VisionEncoderLayer) Forward(ctx ml.Context, hiddenStates ml.Tensor, positionIDs ml.Tensor, opts *VisionModelOptions) ml.Tensor {
 	residual := hiddenStates
-	if e.AttentionNorm != nil {
-		hiddenStates = e.AttentionNorm.Forward(ctx, hiddenStates, opts.eps)
-	}
+	hiddenStates = e.Norm1.Forward(ctx, hiddenStates, opts.eps)
 	hiddenStates = e.SelfAttention.Forward(ctx, hiddenStates, positionIDs, opts)
 	hiddenStates = hiddenStates.Add(ctx, residual)
 
 	residual = hiddenStates
+	hiddenStates = e.Norm2.Forward(ctx, hiddenStates, opts.eps)
 	hiddenStates = e.MLP.Forward(ctx, hiddenStates, opts)
-
 	return hiddenStates.Add(ctx, residual)
 }
 
