@@ -90,8 +90,9 @@ func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) (any, er
 	}
 
 	visionOutputs := m.VisionModel.Forward(ctx, pixelValues)
-	fmt.Println(ml.Dump(ctx, visionOutputs))
+	// fmt.Println(ml.Dump(ctx, visionOutputs))
 	visionOutputs = m.PatchMerger.Forward(ctx, visionOutputs, m.VisionModel.eps)
+	// fmt.Println(ml.Dump(ctx, visionOutputs))
 	return visionOutputs, nil
 }
 
@@ -100,17 +101,11 @@ func (m *Model) PostTokenize(inputs []input.Input) ([]input.Input, error) {
 	var result []input.Input
 
 	// Get image token IDs from config
-	// imageToken := m.Config.Uint("image_token_id")
-	// visionStartToken := m.Config.Uint("vision_start_token_id")
-	// visionEndToken := m.Config.Uint("vision_end_token_id")
 	imageToken := 151655
 	visionStartToken := 151652
 	visionEndToken := 151653
 
 	// Get merge size from vision config
-	// mergeSize := m.Config.Uint("vision_config.spatial_merge_size")
-	// patchSize := m.Config.Uint("vision_config.spatial_patch_size")
-	// windowSize := m.Config.Uint("vision_config.window_size")
 	mergeSize := 2
 	patchSize := 14
 	windowSize := 112
@@ -125,33 +120,27 @@ func (m *Model) PostTokenize(inputs []input.Input) ([]input.Input, error) {
 		if inp.Multimodal == nil {
 			// If not a multimodal input, add it to the result unchanged
 			result = append(result, inp)
-		} else if inp.Token == int32(imageToken) {
+		} else {
 			// This is an image token
 			inputMultimodal := inp.Multimodal.(ml.Tensor)
 
-			// Replace the image token with multiple placeholder tokens
 			// First add the vision start token
 			result = append(result, input.Input{Token: int32(visionStartToken)})
 
-			// Then add the multimodal tensor data at the first position
-			result = append(result,
-				input.Input{
-					Multimodal:     inputMultimodal,
-					MultimodalHash: inp.MultimodalHash,
-				})
+			// Add the image token with the multimodal tensor data at the first position
+			result = append(result, input.Input{
+				Token:          int32(imageToken),
+				Multimodal:     inputMultimodal,
+				MultimodalHash: inp.MultimodalHash,
+			})
 
 			// Then add the placeholder tokens for the remaining positions
-			// Subtract 1 from tokensPerGrid because we already added the first token
-			placeholders := tokensPerGrid - 1
-			for range int(placeholders) {
+			for i := 0; i < tokensPerGrid-1; i++ {
 				result = append(result, input.Input{Token: int32(imageToken)})
 			}
 
 			// Finally add the vision end token
 			result = append(result, input.Input{Token: int32(visionEndToken)})
-		} else {
-			// For any other token, just pass through
-			result = append(result, inp)
 		}
 	}
 
