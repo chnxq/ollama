@@ -1508,7 +1508,7 @@ ggml_tensor * llm_graph_context::build_inp_cross_attn_state() const {
 
     ggml_tensor * cur = nullptr;
 
-    inp->cross_attn_state = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, ubatch.n_tokens);
+    inp->cross_attn_state = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_embd, 1601, 4);
     ggml_set_input(inp->cross_attn_state);
 
     cur = inp->cross_attn_state;

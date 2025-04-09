@@ -10,7 +10,7 @@ Subject: [PATCH] add mllama support
  src/llama-arch.cpp            |  44 +++++
  src/llama-arch.h              |  10 ++
  src/llama-batch.cpp           |   3 +
- src/llama-context.cpp         |  31 ++--
+ src/llama-context.cpp         |  27 ++-
  src/llama-context.h           |   1 +
  src/llama-cparams.h           |   1 +
  src/llama-graph.cpp           |  25 +++
@@ -22,7 +22,7 @@ Subject: [PATCH] add mllama support
  src/llama-model.cpp           | 309 +++++++++++++++++++++++++++++++++-
  src/llama-model.h             |  12 ++
  src/llama-quant.cpp           |   4 +-
- 18 files changed, 473 insertions(+), 21 deletions(-)
+ 18 files changed, 471 insertions(+), 19 deletions(-)
 
 diff --git a/examples/llava/llava.cpp b/examples/llava/llava.cpp
 index 518aad3f..f0e484a1 100644
@@ -242,7 +242,7 @@ index 01d5ca57..8682b0e6 100644
          batch.token = (llama_token *) malloc(sizeof(llama_token) * n_tokens_alloc);
      }
 diff --git a/src/llama-context.cpp b/src/llama-context.cpp
-index 65135172..691f074c 100644
+index 65135172..34e35952 100644
 --- a/src/llama-context.cpp
 +++ b/src/llama-context.cpp
 @@ -858,7 +858,7 @@ float * llama_context::get_logits_ith(int32_t i) {
@@ -267,15 +267,6 @@ index 65135172..691f074c 100644
  void llama_context::set_adapter_lora(
              llama_adapter_lora * adapter,
              float scale) {
-@@ -1036,7 +1042,7 @@ int llama_context::encode(llama_batch & inp_batch) {
- 
-     if (batch.token) {
-         for (int32_t i = 0; i < n_tokens; ++i) {
--            if (batch.token[i] < 0 || (uint32_t) batch.token[i] >= model.vocab.n_tokens()) {
-+            if (batch.token[i] < 0 || (uint32_t) batch.token[i] >= model.hparams.n_vocab) {
-                 LLAMA_LOG_ERROR("%s: invalid token[%d] = %d\n", __func__, i, batch.token[i]);
-                 return -1;
-             }
 @@ -1054,7 +1060,7 @@ int llama_context::encode(llama_batch & inp_batch) {
  
      const int64_t n_embd = hparams.n_embd;
@@ -297,15 +288,6 @@ index 65135172..691f074c 100644
  
      const int64_t n_tokens_all = batch.n_tokens;
      const int64_t n_embd       = hparams.n_embd;
-@@ -1208,7 +1213,7 @@ int llama_context::decode(llama_batch & inp_batch) {
- 
-     if (batch.token) {
-         for (int64_t i = 0; i < n_tokens_all; ++i) {
--            if (batch.token[i] < 0 || (uint32_t) batch.token[i] >= model.vocab.n_tokens()) {
-+            if (batch.token[i] < 0 || (uint32_t) batch.token[i] >= model.hparams.n_vocab) {
-                 LLAMA_LOG_ERROR("%s: invalid token[%" PRId64 "] = %d\n", __func__, i, batch.token[i]);
-                 throw std::runtime_error("invalid token");
-             }
 @@ -1245,7 +1250,7 @@ int llama_context::decode(llama_batch & inp_batch) {
  
      const bool logits_all = n_outputs_all == n_tokens_all;
@@ -391,7 +373,7 @@ index 30e550f0..85ad91b9 100644
  
      enum llama_pooling_type pooling_type;
 diff --git a/src/llama-graph.cpp b/src/llama-graph.cpp
-index cd955d63..eeabdc3e 100644
+index cd955d63..83f3c5a8 100644
 --- a/src/llama-graph.cpp
 +++ b/src/llama-graph.cpp
 @@ -546,6 +546,12 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
@@ -418,7 +400,7 @@ index cd955d63..eeabdc3e 100644
 +
 +    ggml_tensor * cur = nullptr;
 +
-+    inp->cross_attn_state = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, n_embd, ubatch.n_tokens);
++    inp->cross_attn_state = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, n_embd, 1601, 4);
 +    ggml_set_input(inp->cross_attn_state);
 +
 +    cur = inp->cross_attn_state;
