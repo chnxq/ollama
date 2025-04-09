@@ -15,18 +15,18 @@ help:
 	@echo "    make -f $(lastword $(MAKEFILE_LIST)) clean sync"
 
 .PHONY: sync
-sync: llama/build-info.cpp llama/llama.cpp ml/backend/ggml/ggml
+sync: llama/build-info.cpp llama/llama.cpp ml/backend/ggml/ggml apply-patches
 
 .PHONY: llama/build-info.cpp
 llama/build-info.cpp: llama/build-info.cpp.in
 	sed -e 's|@FETCH_HEAD@|$(FETCH_HEAD)|' $< > $@
 
 .PHONY: llama/llama.cpp
-llama/llama.cpp: llama/vendor/
+llama/llama.cpp: llama/vendor/ apply-patches
 	rsync -arvzc -f "merge $@/.rsync-filter" $< $@
 
-.PHONY: ml/backend/ggml/ggml
-ml/backend/ggml/ggml: llama/vendor/ggml/
+.PHONY: ml/backend/ggml/ggml apply-patches
+ml/backend/ggml/ggml: llama/vendor/ggml/ apply-patches
 	rsync -arvzc -f "merge $@/.rsync-filter" $< $@
 
 PATCHES=$(wildcard llama/patches/*.patch)
