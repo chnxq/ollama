@@ -1,5 +1,6 @@
 protect *.go
 protect *-embed.*
+include cmake/
 include include/
 include src/
 include src/CMakeLists.txt
@@ -20,4 +21,5 @@ include *.cu
 include *.cuh
 include *.m
 include *.metal
+include common.cmake
 exclude *
