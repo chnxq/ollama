@@ -62,6 +62,13 @@ func New(c fs.Config) (model.Model, error) {
 	return m, nil
 }
 
+type imageFeatures struct {
+	Tensor ml.Tensor
+	GridT  int
+	GridH  int
+	GridW  int
+}
+
 func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) (any, error) {
 	if len(m.VisionModel.Layers) == 0 {
 		return nil, model.ErrNoVisionModel
@@ -72,7 +79,7 @@ func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) (any, er
 		return nil, err
 	}
 
-	f32s, err := m.ImageProcessor.ProcessImage(image)
+	f32s, gridT, gridH, gridW, err := m.ImageProcessor.ProcessImage(image)
 	if err != nil {
 		return nil, err
 	}
@@ -93,7 +100,14 @@ func (m *Model) EncodeMultimodal(ctx ml.Context, multimodalData []byte) (any, er
 	// fmt.Println(ml.Dump(ctx, visionOutputs))
 	visionOutputs = m.PatchMerger.Forward(ctx, visionOutputs, m.VisionModel.eps)
 	// fmt.Println(ml.Dump(ctx, visionOutputs))
-	return visionOutputs, nil
+
+	// Return the tensor along with grid dimensions
+	return &imageFeatures{
+		Tensor: visionOutputs,
+		GridT:  gridT,
+		GridH:  gridH,
+		GridW:  gridW,
+	}, nil
 }
 
 // PostTokenize arranges Qwen-2.5-VL's inputs for the forward pass
@@ -105,24 +119,26 @@ func (m *Model) PostTokenize(inputs []input.Input) ([]input.Input, error) {
 	visionStartToken := 151652
 	visionEndToken := 151653
 
-	// Get merge size from vision config
-	mergeSize := 2
-	patchSize := 14
-	windowSize := 112
-
-	// Calculate grid dimensions
-	patchesPerDim := windowSize / patchSize
-	gridSize := patchesPerDim / mergeSize
-
-	tokensPerGrid := gridSize * gridSize
+	// Get merge size from config
+	mergeSize := m.ImageProcessor.mergeSize
 
 	for _, inp := range inputs {
 		if inp.Multimodal == nil {
 			// If not a multimodal input, add it to the result unchanged
 			result = append(result, inp)
 		} else {
-			// This is an image token
-			inputMultimodal := inp.Multimodal.(ml.Tensor)
+			// This is an image token with multimodal data
+			features := inp.Multimodal.(*imageFeatures)
+
+			// Get grid dimensions from the features
+			gridT := features.GridT
+			gridH := features.GridH
+			gridW := features.GridW
+
+			// Calculate tokens per grid based on grid dimensions
+			mergeLength := mergeSize * mergeSize
+			gridProduct := gridT * gridH * gridW
+			tokensPerGrid := gridProduct / mergeLength
 
 			// First add the vision start token
 			result = append(result, input.Input{Token: int32(visionStartToken)})
@@ -130,16 +146,15 @@ func (m *Model) PostTokenize(inputs []input.Input) ([]input.Input, error) {
 			// Add the image token with the multimodal tensor data at the first position
 			result = append(result, input.Input{
 				Token:          int32(imageToken),
-				Multimodal:     inputMultimodal,
+				Multimodal:     features.Tensor,
 				MultimodalHash: inp.MultimodalHash,
 			})
 
-			// Then add the placeholder tokens for the remaining positions
-			for i := 0; i < tokensPerGrid-1; i++ {
+			// Add the placeholder tokens for the remaining positions (tokensPerGrid-1)
+			for range tokensPerGrid - 1 {
 				result = append(result, input.Input{Token: int32(imageToken)})
 			}
 
-			// Finally add the vision end token
 			result = append(result, input.Input{Token: int32(visionEndToken)})
 		}
 	}

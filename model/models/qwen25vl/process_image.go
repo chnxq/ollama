@@ -77,9 +77,7 @@ func (p *ImageProcessor) SmartResize(height, width int) (int, int) {
 	return hBar, wBar
 }
 
-func (p *ImageProcessor) ProcessImage(img image.Image) ([]float32, error) {
-
-	// Get original dimensions
+func (p *ImageProcessor) ProcessImage(img image.Image) ([]float32, int, int, int, error) {
 	origWidth := img.Bounds().Dx()
 	origHeight := img.Bounds().Dy()
 
@@ -89,8 +87,6 @@ func (p *ImageProcessor) ProcessImage(img image.Image) ([]float32, error) {
 	// Resize image using existing functions
 	resizedImg := imageproc.Resize(img, image.Point{X: resizedWidth, Y: resizedHeight}, imageproc.ResizeBilinear)
 
-	// Normalize the image (use existing code)
-	// We need channel-first format (CHW)
 	normalizedPixels := imageproc.Normalize(
 		resizedImg,
 		[3]float32{p.imageMean[0], p.imageMean[1], p.imageMean[2]},
@@ -104,13 +100,13 @@ func (p *ImageProcessor) ProcessImage(img image.Image) ([]float32, error) {
 	gridW := resizedWidth / p.patchSize
 	gridT := 1 // For single images, temporal dimension is 1
 
-	// Create patches directly
 	patches, err := p.createPatches(normalizedPixels, resizedHeight, resizedWidth, gridH, gridW, gridT)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create patches: %v", err)
+		return nil, 0, 0, 0, fmt.Errorf("failed to create patches: %v", err)
 	}
 
-	return patches, nil
+	// Return patches and grid dimensions
+	return patches, gridT, gridH, gridW, nil
 }
 
 func (p *ImageProcessor) createPatches(pixels []float32, height, width, gridH, gridW, gridT int) ([]float32, error) {
