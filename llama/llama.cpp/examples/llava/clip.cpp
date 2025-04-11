@@ -1472,15 +1472,15 @@ struct clip_model_loader {
             std::vector<uint8_t> read_buf;
 
 #ifdef _WIN32
-            int wlen = MultiByteToWideChar(CP_UTF8, 0, fname, -1, NULL, 0);
+            int wlen = MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, NULL, 0);
             if (!wlen) {
-                return NULL;
+                throw std::runtime_error(string_format("%s: failed to convert %s to wide string\n", __func__, fname.c_str()));
             }
             wchar_t * wbuf = (wchar_t *) malloc(wlen * sizeof(wchar_t));
-            wlen = MultiByteToWideChar(CP_UTF8, 0, fname, -1, wbuf, wlen);
+            wlen = MultiByteToWideChar(CP_UTF8, 0, fname.c_str(), -1, wbuf, wlen);
             if (!wlen) {
                 free(wbuf);
-                return NULL;
+                throw std::runtime_error(string_format("%s: failed to convert %s to wide string\n", __func__, fname.c_str()));
             }
 #if __GLIBCXX__
             int fd = _wopen(wbuf, _O_RDONLY | _O_BINARY);
