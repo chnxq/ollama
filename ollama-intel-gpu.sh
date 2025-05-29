@@ -1,0 +1,9 @@
+export OLLAMA_INTEL_GPU=true
+export OLLAMA_INTEL_IF_TYPE=SYCL
+export OLLAMA_NUM_GPU=64
+export SYCL_CACHE_PERSISTENT=1
+export OLLAMA_LIBRARY_PATH=./build/lib/ollama
+# export OLLAMA_MODELS=/mnt/d/OllamaModels/
+export NO_PROXY=localhost,127.0.0.1
+export PATH=$PATH:./build/lib/ollama
+./ollama serve

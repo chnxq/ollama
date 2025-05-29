@@ -44,7 +44,7 @@ Other ref: [SYCL](https://github.com/ggml-org/llama.cpp/blob/master/docs/backend
 
 ## Compile the CPU & GPU dynamic libraries
 
-on windows powershell,establish environmental variables:
+### on windows powershell,establish environmental variables:
 ```shell
 cmd.exe "/K" '"C:\Program Files (x86)\Intel\oneAPI\setvars.bat" && powershell'
 ```
@@ -56,6 +56,20 @@ cmake -B build -G "Ninja" -DGGML_SYCL=ON -DGGML_SYCL_TARGET=INTEL -DGGML_CPU_ALL
 ```
 ```shell
 cmake --build build --config Release -j 
+```
+
+### on linux,establish environmental variables:
+```shell
+source /opt/intel/oneapi/setvars.sh
+```
+
+build libraries:
+on ollama root directory:
+```shell
+cmake -B build -DGGML_SYCL=ON -DGGML_SYCL_TARGET=INTEL -DGGML_CPU_ALL_VARIANTS=ON -DGGML_BACKEND_DL=ON -DCMAKE_C_COMPILER=icx -DCMAKE_CXX_COMPILER=icpx -DCMAKE_BUILD_TYPE=Release
+```
+```shell
+cmake --build build --config Release -j -v
 ```
 
 build go src:
