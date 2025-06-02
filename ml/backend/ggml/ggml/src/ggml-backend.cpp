@@ -786,7 +786,7 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
                     for (int b = 0; b < src_backend_id; b++) {
                         if (ggml_backend_supports_op(sched->backends[b], tensor) && ggml_backend_offload_op(sched->backends[b], tensor)) {
                             SET_CAUSE(tensor, "1.off");
-                            GGML_LOG_DEBUG("%s:%d:%d ```````````````````````````````````````````` backend_id= %d\n", __func__, __LINE__, ccc, b);
+                            GGML_LOG_DEBUG("%s:%d ```````````````````````````````````````````` backend_id= %d\n", __func__, __LINE__, b);
                             return b;
                         }
                     }
@@ -1372,7 +1372,6 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
 
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
     struct ggml_backend_sched_split * splits = sched->splits;
-    GGML_LOG_DEBUG("%s:%d ggml_backend_sched_compute_splits n_splits= %d\n", __func__, __LINE__, sched->n_splits);
 
     for (int i = 0; i < sched->n_splits; i++) {
         struct ggml_backend_sched_split * split = &splits[i];
@@ -1415,13 +1414,11 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
 
         if (!sched->callback_eval) {
-    GGML_LOG_DEBUG("%s:%d ggml_backend_sched_compute_splits 【i=%d】    222222\n", __func__, __LINE__, i);
             enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
             if (ec != GGML_STATUS_SUCCESS) {
                 return ec;
             }
         } else {
-    GGML_LOG_DEBUG("%s:%d ggml_backend_sched_compute_splits【i=%d】    333333\n", __func__, __LINE__, i);
             // similar to ggml_backend_compare_graph_backend
             for (int j0 = 0; j0 < split->graph.n_nodes; j0++) {
                 struct ggml_tensor * t = split->graph.nodes[j0];
