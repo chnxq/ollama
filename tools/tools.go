@@ -18,9 +18,8 @@ const (
 )
 
 type Parser struct {
-	tag        string
-	names      []string
-	properties []string
+	tag   string
+	tools []api.Tool
 
 	state  toolsState
 	buffer []byte
@@ -34,15 +33,10 @@ func NewParser(tmpl *template.Template, tools []api.Tool) *Parser {
 }
 
 func NewParserWithTag(tools []api.Tool, tag string) *Parser {
-	var p Parser
-	for _, t := range tools {
-		p.names = append(p.names, t.Function.Name)
-		for r := range t.Function.Parameters.Properties {
-			p.properties = append(p.properties, r)
-		}
+	return &Parser{
+		tag:   tag,
+		tools: tools,
 	}
-	p.tag = tag
-	return &p
 }
 
 // Add processes a string input to parse tool calls and content that
@@ -121,36 +115,40 @@ func (p *Parser) findTag() (int, bool) {
 // parseToolCall finds the next complete tool call in the buffer
 // incrementing n and advancing the buffer.
 func (p *Parser) parseToolCall() *api.ToolCall {
-	var name string
-	var args map[string]any
+	var tool *api.Tool
 	var end int = len(p.buffer)
+	var i int
 
 	// find tool name
-	var i int
-	for _, n := range p.names {
+	for _, t := range p.tools {
+		n := t.Function.Name
 		if i = bytes.Index(p.buffer, []byte(n)); i != -1 {
 			if i+len(n) < end {
-				name = n
+				tool = &t
 				end = i + len(n)
 			}
 		}
 	}
 
-	if name == "" {
+	if tool == nil {
 		return nil
 	}
 
-	if args, i = p.findArguments(); args == nil {
-		return nil
-	}
+	// only look for arguments after the tool name if the tool has parameters
+	// TODO (jmorganca): while probably uncommon, this doesn't support
+	// parsing arguments before the tool name, which may be needed in the future
+	args := map[string]any{}
+	if len(tool.Function.Parameters.Properties) > 0 {
+		if args, i = findArguments(*tool, p.buffer[end:]); args == nil {
+			return nil
+		}
 
-	if i > end {
-		end = i
+		end += i
 	}
 
 	tc := &api.ToolCall{
 		Function: api.ToolCallFunction{
-			Name:      name,
+			Name:      tool.Function.Name,
 			Arguments: args,
 			Index:     p.n,
 		},
@@ -162,10 +160,14 @@ func (p *Parser) parseToolCall() *api.ToolCall {
 }
 
 // findArguments returns the first object that appears to be
-// arguments and the position where the arguments end, returning nil and 0 if
-// an invalid JSON object or non-arguments object is found first
-func (p *Parser) findArguments() (map[string]any, int) {
-	if len(p.buffer) == 0 {
+// arguments for the provided tool in the provided buffer,
+// returning nil if no arguments are found.
+// TODO (jmorganca): this does not support parsing omitted arguments
+// objects for functions that have all-optional parameters
+// e.g. `{"name": "get_conditions", "arguments": {}}` will work but
+// `{"name": "get_conditions"}` will not currently work
+func findArguments(tool api.Tool, buffer []byte) (map[string]any, int) {
+	if len(buffer) == 0 {
 		return nil, 0
 	}
 
@@ -175,7 +177,7 @@ func (p *Parser) findArguments() (map[string]any, int) {
 	var object []byte
 
 	// find any outer json object
-	for i, c := range p.buffer {
+	for i, c := range buffer {
 		if c == '{' {
 			braces++
 			if start == -1 {
@@ -184,11 +186,13 @@ func (p *Parser) findArguments() (map[string]any, int) {
 		}
 
 		if c == '}' {
-			braces--
-			if braces == 0 && start != -1 {
-				end = i + 1
-				object = p.buffer[start:end]
-				break
+			if start != -1 {
+				braces--
+				if braces == 0 {
+					end = i + 1
+					object = buffer[start:end]
+					break
+				}
 			}
 		}
 	}
@@ -198,32 +202,45 @@ func (p *Parser) findArguments() (map[string]any, int) {
 	}
 
 	var data map[string]any
-
-	// not valid json
 	if err := json.Unmarshal(object, &data); err != nil {
 		return nil, 0
 	}
 
 	var find func(obj any) map[string]any
 	find = func(obj any) map[string]any {
-		switch v := obj.(type) {
+		switch obj := obj.(type) {
 		case map[string]any:
-			// check if the object keys are valid tool properties
-			// TODO (jmorganca): check only sets of properties that
-			// go together instead of the entire set
-			for _, prop := range p.properties {
-				if _, exists := v[prop]; exists {
-					return v
+			valid := true
+			// check if all keys in the object exist in the tool's parameters
+			for key := range obj {
+				if _, exists := tool.Function.Parameters.Properties[key]; !exists {
+					valid = false
+					break
 				}
 			}
 
-			for _, value := range v {
+			// check for required parameters
+			// TODO (jmorganca): this should error instead of silently failing
+			if valid {
+				for _, required := range tool.Function.Parameters.Required {
+					if _, exists := obj[required]; !exists {
+						valid = false
+						break
+					}
+				}
+			}
+
+			if valid {
+				return obj
+			}
+
+			for _, value := range obj {
 				if result := find(value); result != nil {
 					return result
 				}
 			}
 		case []any:
-			for _, item := range v {
+			for _, item := range obj {
 				if result := find(item); result != nil {
 					return result
 				}
