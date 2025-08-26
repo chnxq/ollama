@@ -125,6 +125,7 @@ if (NOT MSVC)
 endif()
 
 if (MINGW)
+    # Target Windows 8 for PrefetchVirtualMemory
     add_compile_definitions(_WIN32_WINNT=${GGML_WIN_VER})
 endif()
 
@@ -322,8 +323,8 @@ if (GGML_CPU_ALL_VARIANTS)
         ggml_add_cpu_backend_variant(sandybridge  SSE42 AVX)
         ggml_add_cpu_backend_variant(haswell      SSE42 AVX F16C AVX2 BMI2 FMA)
         ggml_add_cpu_backend_variant(skylakex     SSE42 AVX F16C AVX2 BMI2 FMA AVX512)
-        ggml_add_cpu_backend_variant(icelake      SSE42 AVX F16C AVX2 BMI2 FMA AVX512 AVX512_VBMI AVX512_VNNI)
-        ggml_add_cpu_backend_variant(alderlake    SSE42 AVX F16C AVX2 BMI2 FMA AVX_VNNI)
+        ggml_add_cpu_backend_variant(icelake      SSE42 AVX F16C AVX2 BMI2 FMA AVX512 AVX512_VBMI) # AVX512_VNNI)
+        ggml_add_cpu_backend_variant(alderlake    SSE42 AVX F16C AVX2 BMI2 FMA) # AVX_VNNI)
     elseif(GGML_SYSTEM_ARCH STREQUAL "ARM")
         if (CMAKE_SYSTEM_NAME MATCHES "Linux")
             # Many of these features are optional so we build versions with popular

@@ -8,6 +8,8 @@ include /cmake/
 include /cmake/common.cmake
 include /include/
 include /src/
+include src/CMakeLists.txt
+include src/**/CMakeLists.txt
 include /src/ggml-blas/
 include /src/ggml-cpu/
 include /src/ggml-cpu/amx/
@@ -20,10 +22,11 @@ include /src/ggml-cuda/vendors/
 include /src/ggml-cuda/template-instances/
 include /src/ggml-hip/
 include /src/ggml-metal/
+include src/ggml-sycl/
 include CMakeLists.txt
 include *.[chm]
 include *.cpp
 include *.cu
 include *.cuh
 include *.metal
-hide *
+exclude *
