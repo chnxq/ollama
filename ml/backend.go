@@ -266,7 +266,7 @@ func (m DeviceMemory) LogValue() slog.Value {
 // allocation is guaranteed to be provided so that if it failed, the caller can
 // accommodate that to make forward progress.
 type BackendMemory struct {
-	// InputsWeights are always located on the CPU and cannot be moved
+	// InputWeights are always located on the CPU and cannot be moved
 	InputWeights Memory
 
 	// CPU model components are located in system memory. This does not
@@ -372,6 +372,7 @@ type Context interface {
 
 	Forward(...Tensor) Context
 	Compute(...Tensor)
+	ComputeWithNotify(func(), ...Tensor) // notify callback once compute has begun
 
 	// Reserve is analogous to Compute but rather than executing a
 	// graph, simply preallocates memory. Typically called with a
@@ -401,6 +402,8 @@ type Tensor interface {
 	Bytes() []byte
 	Floats() []float32
 
+	SetValueFromIntSlice(s []int32)
+
 	Neg(ctx Context) Tensor
 	Add(ctx Context, t2 Tensor) Tensor
 	Sub(ctx Context, t2 Tensor) Tensor
@@ -413,6 +416,7 @@ type Tensor interface {
 	AddID(ctx Context, t2, ids Tensor) Tensor
 
 	Softmax(ctx Context) Tensor
+	L2Norm(ctx Context, eps float32) Tensor
 	LayerNorm(ctx Context, weight, bias Tensor, eps float32) Tensor
 	RMSNorm(ctx Context, weight Tensor, eps float32) Tensor
 	Scale(ctx Context, s float64) Tensor
@@ -426,12 +430,13 @@ type Tensor interface {
 	Sin(ctx Context) Tensor
 	Cos(ctx Context) Tensor
 	Tanh(ctx Context) Tensor
-	GELU(ctx Context) Tensor
-	QuickGELU(ctx Context) Tensor
-	SILU(ctx Context) Tensor
-	RELU(ctx Context) Tensor
+	GELU(ctx Context, up ...Tensor) Tensor
+	SILU(ctx Context, up ...Tensor) Tensor
+	RELU(ctx Context, up ...Tensor) Tensor
 	Sigmoid(ctx Context) Tensor
-	SwiGLU(ctx Context, up Tensor, alpha, limit float32) Tensor
+
+	// AlphaLimitSILU is a variant of SILU that clamps the input to the range [-limit, limit]
+	SILUAlphaLimit(ctx Context, up Tensor, alpha, limit float32) Tensor
 
 	Reshape(ctx Context, shape ...int) Tensor
 	View(ctx Context, offset int, shape ...int) Tensor

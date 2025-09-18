@@ -82,6 +82,7 @@ type Backend struct {
 	// to the name that is used by the model definition
 	tensorLoadTargets map[string][]string
 
+	schedMu       sync.Mutex // Only one Compute can run at a time
 	sched         C.ggml_backend_sched_t
 	schedBackends []C.ggml_backend_t
 	schedBufts    []C.ggml_backend_buffer_type_t
@@ -270,7 +271,7 @@ func New(modelPath string, params ml.BackendParams) (ml.Backend, error) {
 			tt := C.ggml_new_tensor(ctxs[bt], kind, C.int(len(t.source.Shape)), (*C.int64_t)(unsafe.Pointer(&t.source.Shape[0])))
 			C.ggml_set_name(tt, cname)
 
-			slog.Log(context.TODO(), logutil.LevelTrace, "created tensor", "name", name, "shape", t.source.Shape, "dtype", t.source.Kind, "buffer_type", C.GoString(C.ggml_backend_buft_name(bt)))
+			logutil.Trace("created tensor", "name", name, "shape", t.source.Shape, "dtype", t.source.Kind, "buffer_type", C.GoString(C.ggml_backend_buft_name(bt)))
 
 			size := pad(C.ggml_backend_buft_get_alloc_size(bt, tt), C.ggml_backend_buft_get_alignment(bt))
 			if layer == -1 {
@@ -377,7 +378,7 @@ func New(modelPath string, params ml.BackendParams) (ml.Backend, error) {
 	}
 
 	for bs := range maps.Values(bbs) {
-		slog.Log(context.TODO(), logutil.LevelTrace, "model weights", "buffer", C.GoString(C.ggml_backend_buffer_name(bs)),
+		logutil.Trace("model weights", "buffer", C.GoString(C.ggml_backend_buffer_name(bs)),
 			"size", format.HumanBytes2(uint64(C.ggml_backend_buffer_get_size(bs))))
 	}
 
@@ -535,6 +536,7 @@ func (b *Backend) Load(ctx context.Context, progress func(float32)) error {
 				const BS = 17                             // MXFP4 block size
 				bts := make([]byte, 8*BS*format.KibiByte) // ~128k block aligned
 				var s uint64
+				var tmp [16]byte
 				for s < t.Size() {
 					// Stop if either the parent context has been canceled or if any of the other tensors returned an error
 					if err := ctx.Err(); err != nil {
@@ -546,37 +548,13 @@ func (b *Backend) Load(ctx context.Context, progress func(float32)) error {
 						return err
 					}
 					for j := range n / BS {
-						for i := 1; i < BS; i++ {
-							// swap nibbles
-							t_lo := bts[j*BS+i] & 0x0F
-							t_hi := bts[j*BS+i] & 0xF0
-							bts[j*BS+i] = (t_lo << 4) | (t_hi >> 4)
-						}
-						// transform aaaa...bbbb... to abababab...
-						oi := 0
-						tmp := [16]byte{}
 						for i := 1; i < 9; i++ {
-							blk_a0 := bts[j*BS+i] & 0xF0
-							blk_a1 := bts[j*BS+i] << 4
-							blk_b0 := bts[j*BS+i+8] >> 4
-							blk_b1 := bts[j*BS+i+8] & 0x0F
-							// swap once more
-							out0 := blk_a0 | blk_b0
-							out1 := blk_a1 | blk_b1
-							out_h0 := out0 & 0xF0
-							out_l0 := out0 & 0x0F
-							out_h1 := out1 & 0xF0
-							out_l1 := out1 & 0x0F
-							out0 = (out_h0 >> 4) | (out_l0 << 4)
-							out1 = (out_h1 >> 4) | (out_l1 << 4)
-							tmp[oi] = out0
-							oi++
-							tmp[oi] = out1
-							oi++
+							// transform a1b2c3 ... x7y8z9 -> 71xa82yb93zc
+							a, b := bts[j*BS+i], bts[j*BS+i+8]
+							tmp[2*(i-1)] = (a & 0x0F) | (b << 4)
+							tmp[2*(i-1)+1] = (a >> 4) | (b & 0xF0)
 						}
-						for i := range tmp {
-							bts[j*BS+i+1] = tmp[i]
-						}
+						copy(bts[j*BS+1:j*BS+17], tmp[:])
 					}
 
 					for _, tt := range tts {
@@ -650,6 +628,18 @@ func (b *Backend) Load(ctx context.Context, progress func(float32)) error {
 
 			return nil
 		})
+	}
+
+	// Cleanup any backend state from devices that we didn't end up using
+nextDevice:
+	for _, d := range append(gpus, append(accels, cpus...)...) {
+		for _, backend := range b.schedBackends {
+			if d == C.ggml_backend_get_device(backend) {
+				continue nextDevice
+			}
+		}
+
+		C.ggml_backend_dev_reset(d)
 	}
 
 	if err := g.Wait(); err != nil {
@@ -769,6 +759,15 @@ func (c *Context) Forward(tensors ...ml.Tensor) ml.Context {
 }
 
 func (c *Context) Compute(tensors ...ml.Tensor) {
+	c.ComputeWithNotify(nil, tensors...)
+}
+
+func (c *Context) ComputeWithNotify(cb func(), tensors ...ml.Tensor) {
+	c.b.schedMu.Lock()
+	defer c.b.schedMu.Unlock()
+	if cb != nil {
+		go cb()
+	}
 	if status := C.ggml_backend_sched_graph_compute_async(c.b.sched, c.graph); status != C.GGML_STATUS_SUCCESS {
 		panic(fmt.Errorf("error computing ggml graph: %v", status))
 	}
@@ -812,7 +811,7 @@ func (c *Context) Reserve() {
 			}
 		}
 
-		slog.Log(context.TODO(), logutil.LevelTrace, "compute graph", "backend", C.GoString(C.ggml_backend_name(c.b.schedBackends[i])),
+		logutil.Trace("compute graph", "backend", C.GoString(C.ggml_backend_name(c.b.schedBackends[i])),
 			"buffer_type", C.GoString(C.ggml_backend_buft_name(c.b.schedBufts[i])), "size", format.HumanBytes2(uint64(bufferStatus.size)))
 	}
 
@@ -1021,6 +1020,12 @@ func (t *Tensor) Floats() (data []float32) {
 	return
 }
 
+func (t *Tensor) SetValueFromIntSlice(s []int32) {
+	if len(s) > 0 {
+		C.ggml_backend_tensor_set(t.t, unsafe.Pointer(&s[0]), 0, C.ggml_nbytes(t.t))
+	}
+}
+
 func (t *Tensor) DType() ml.DType {
 	switch t.t._type {
 	case C.GGML_TYPE_F32:
@@ -1197,6 +1202,13 @@ func (t *Tensor) AddID(ctx ml.Context, t2, ids ml.Tensor) ml.Tensor {
 	return &Tensor{
 		b: t.b,
 		t: C.ggml_add_id(ctx.(*Context).ctx, t.t, t2.(*Tensor).t, ids.(*Tensor).t),
+	}
+}
+
+func (t *Tensor) L2Norm(ctx ml.Context, eps float32) ml.Tensor {
+	return &Tensor{
+		b: t.b,
+		t: C.ggml_l2_norm(ctx.(*Context).ctx, t.t, C.float(eps)),
 	}
 }
 
@@ -1419,35 +1431,46 @@ func (t *Tensor) IM2Col(ctx ml.Context, t2 ml.Tensor, s0, s1, p0, p1, d0, d1 int
 	}
 }
 
-func (t *Tensor) GELU(ctx ml.Context) ml.Tensor {
+func (t *Tensor) GELU(ctx ml.Context, t2 ...ml.Tensor) ml.Tensor {
+	if len(t2) > 0 {
+		return &Tensor{
+			b: t.b,
+			t: C.ggml_geglu_split(ctx.(*Context).ctx, t.t, t2[0].(*Tensor).t),
+		}
+	}
 	return &Tensor{
 		b: t.b,
 		t: C.ggml_gelu_inplace(ctx.(*Context).ctx, t.t),
 	}
 }
 
-func (t *Tensor) QuickGELU(ctx ml.Context) ml.Tensor {
-	return &Tensor{
-		b: t.b,
-		t: C.ggml_gelu_quick_inplace(ctx.(*Context).ctx, t.t),
+func (t *Tensor) SILU(ctx ml.Context, t2 ...ml.Tensor) ml.Tensor {
+	if len(t2) > 0 {
+		return &Tensor{
+			b: t.b,
+			t: C.ggml_swiglu_split(ctx.(*Context).ctx, t.t, t2[0].(*Tensor).t),
+		}
 	}
-}
-
-func (t *Tensor) SILU(ctx ml.Context) ml.Tensor {
 	return &Tensor{
 		b: t.b,
 		t: C.ggml_silu_inplace(ctx.(*Context).ctx, t.t),
 	}
 }
 
-func (t *Tensor) RELU(ctx ml.Context) ml.Tensor {
+func (t *Tensor) RELU(ctx ml.Context, t2 ...ml.Tensor) ml.Tensor {
+	if len(t2) > 0 {
+		return &Tensor{
+			b: t.b,
+			t: C.ggml_reglu_split(ctx.(*Context).ctx, t.t, t2[0].(*Tensor).t),
+		}
+	}
 	return &Tensor{
 		b: t.b,
 		t: C.ggml_relu_inplace(ctx.(*Context).ctx, t.t),
 	}
 }
 
-func (t *Tensor) SwiGLU(ctx ml.Context, up ml.Tensor, alpha, limit float32) ml.Tensor {
+func (t *Tensor) SILUAlphaLimit(ctx ml.Context, up ml.Tensor, alpha, limit float32) ml.Tensor {
 	return &Tensor{
 		b: t.b,
 		t: C.ggml_swiglu_oai(ctx.(*Context).ctx, t.t, up.(*Tensor).t, C.float(alpha), C.float(limit)),

@@ -148,7 +148,11 @@ func NewLlamaServer(gpus discover.GpuInfoList, modelPath string, f *ggml.GGML, a
 	var textProcessor model.TextProcessor
 	var err error
 	if envconfig.NewEngine() || f.KV().OllamaEngineRequired() {
-		textProcessor, err = model.NewTextProcessor(modelPath)
+		if len(projectors) == 0 {
+			textProcessor, err = model.NewTextProcessor(modelPath)
+		} else {
+			err = errors.New("split vision models aren't supported")
+		}
 		if err != nil {
 			// To prepare for opt-out mode, instead of treating this as an error, we fallback to the old runner
 			slog.Debug("model not yet supported by Ollama engine, switching to compatibility mode", "model", modelPath, "error", err)
@@ -161,17 +165,14 @@ func NewLlamaServer(gpus discover.GpuInfoList, modelPath string, f *ggml.GGML, a
 		}
 	}
 
-	newEstimates := textProcessor != nil && envconfig.NewMemoryEstimates()
-	if newEstimates {
-		slog.Info("enabling new memory estimates")
-	}
-
 	// Verify the requested context size is <= the model training size
 	trainCtx := f.KV().ContextLength()
 	if opts.NumCtx > int(trainCtx) && trainCtx > 0 {
 		slog.Warn("requested context size too large for model", "num_ctx", opts.NumCtx, "n_ctx_train", trainCtx)
 		opts.NumCtx = int(trainCtx)
 	}
+
+	opts.NumBatch = min(opts.NumBatch, opts.NumCtx)
 
 	loadRequest := LoadRequest{LoraPath: adapters, KvSize: opts.NumCtx * numParallel, BatchSize: opts.NumBatch, Parallel: numParallel, MultiUserCache: envconfig.MultiUserCache()}
 
@@ -195,6 +196,11 @@ func NewLlamaServer(gpus discover.GpuInfoList, modelPath string, f *ggml.GGML, a
 	// This will disable flash attention unless all GPUs on the system support it, even if we end up selecting a subset
 	// that can handle it.
 	fa := envconfig.FlashAttention()
+	if f.FlashAttention() {
+		slog.Info("model wants flash attention")
+		fa = true
+	}
+
 	if fa && !gpus.FlashAttentionSupported() {
 		slog.Warn("flash attention enabled but not supported by gpu")
 		fa = false
@@ -213,7 +219,7 @@ func NewLlamaServer(gpus discover.GpuInfoList, modelPath string, f *ggml.GGML, a
 
 		// Flash Attention also supports kv cache quantization
 		// Enable if the requested and kv cache type is supported by the model
-		if kvct != "" && f.SupportsKVCacheType(kvct) {
+		if f.SupportsKVCacheType(kvct) {
 			loadRequest.KvCacheType = kvct
 		} else {
 			slog.Warn("kv cache type not supported by model", "type", kvct)
@@ -355,29 +361,39 @@ func NewLlamaServer(gpus discover.GpuInfoList, modelPath string, f *ggml.GGML, a
 
 		s.cmd.Env = append(s.cmd.Env, "OLLAMA_LIBRARY_PATH="+strings.Join(ggmlPaths, string(filepath.ListSeparator)))
 
-		envWorkarounds := [][2]string{}
+		envWorkarounds := []string{}
 		for _, gpu := range gpus {
 			envWorkarounds = append(envWorkarounds, gpu.EnvWorkarounds...)
 		}
+		// Always filter down the set of GPUs in case there are any unsupported devices that might crash
+		envWorkarounds = append(envWorkarounds, gpus.GetVisibleDevicesEnv()...)
 		pathEnvVal := strings.Join(libraryPaths, string(filepath.ListSeparator))
 
 		// Update or add the path variable with our adjusted version
 		pathNeeded := true
+		envWorkaroundDone := make([]bool, len(envWorkarounds))
 		for i := range s.cmd.Env {
 			cmp := strings.SplitN(s.cmd.Env[i], "=", 2)
 			if strings.EqualFold(cmp[0], pathEnv) {
 				s.cmd.Env[i] = pathEnv + "=" + pathEnvVal
 				pathNeeded = false
 			} else if len(envWorkarounds) != 0 {
-				for _, kv := range envWorkarounds {
-					if strings.EqualFold(cmp[0], kv[0]) {
-						s.cmd.Env[i] = kv[0] + "=" + kv[1]
+				for j, kv := range envWorkarounds {
+					tmp := strings.SplitN(kv, "=", 2)
+					if strings.EqualFold(cmp[0], tmp[0]) {
+						s.cmd.Env[i] = kv
+						envWorkaroundDone[j] = true
 					}
 				}
 			}
 		}
 		if pathNeeded {
 			s.cmd.Env = append(s.cmd.Env, pathEnv+"="+pathEnvVal)
+		}
+		for i, done := range envWorkaroundDone {
+			if !done {
+				s.cmd.Env = append(s.cmd.Env, envWorkarounds[i])
+			}
 		}
 
 		slog.Info("starting runner", "cmd", s.cmd)
@@ -416,7 +432,7 @@ func NewLlamaServer(gpus discover.GpuInfoList, modelPath string, f *ggml.GGML, a
 			}
 		}()
 
-		if newEstimates {
+		if textProcessor != nil {
 			return &ollamaServer{llmServer: s}, nil
 		} else {
 			return &llamaServer{llmServer: s, ggml: f}, nil
@@ -663,8 +679,12 @@ func (s *ollamaServer) Load(ctx context.Context, gpus discover.GpuInfoList, requ
 
 	if !(len(gpus) == 1 && gpus[0].Library == "cpu") {
 		for _, gpu := range gpus {
+			available := gpu.FreeMemory - envconfig.GpuOverhead() - gpu.MinimumMemory
+			if gpu.FreeMemory < envconfig.GpuOverhead()+gpu.MinimumMemory {
+				available = 0
+			}
 			slog.Info("gpu memory", "id", gpu.ID,
-				"available", format.HumanBytes2(gpu.FreeMemory-envconfig.GpuOverhead()-gpu.MinimumMemory),
+				"available", format.HumanBytes2(available),
 				"free", format.HumanBytes2(gpu.FreeMemory),
 				"minimum", format.HumanBytes2(gpu.MinimumMemory),
 				"overhead", format.HumanBytes2(envconfig.GpuOverhead()))
@@ -846,7 +866,7 @@ func (s *ollamaServer) createLayout(systemInfo discover.SystemInfo, systemGPUs d
 		}
 		layers[i] += memory.CPU.Weights[i].Size
 		layers[i] += memory.CPU.Cache[i].Size
-		slog.Log(context.TODO(), logutil.LevelTrace, "layer to assign", "layer", i, "size", format.HumanBytes2(layers[i]))
+		logutil.Trace("layer to assign", "layer", i, "size", format.HumanBytes2(layers[i]))
 	}
 
 	gpuLayers := ml.GPULayersList{}
