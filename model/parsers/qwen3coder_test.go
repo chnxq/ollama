@@ -104,6 +104,21 @@ func TestQwenParserStreaming(t *testing.T) {
 			},
 		},
 		{
+			desc: "unambiguous empty: partial tool open at buffer start",
+			steps: []step{
+				{
+					input:      "<tool_ca",
+					wantEvents: []qwenEvent{},
+				},
+				{
+					input: "ll>abc</tool_call>",
+					wantEvents: []qwenEvent{
+						qwenEventRawToolCall{raw: "abc"},
+					},
+				},
+			},
+		},
+		{
 			desc: "trailing whitespace between tool call and content",
 			steps: []step{
 				{
@@ -162,6 +177,137 @@ func TestQwenParserStreaming(t *testing.T) {
 					input: "b",
 					wantEvents: []qwenEvent{
 						qwenEventContent{content: "\nb"},
+					},
+				},
+			},
+		},
+		{
+			desc: "unicode content",
+			steps: []step{
+				{
+					input: "你好 🌍<tool_call>test</tool_call>مرحبا",
+					wantEvents: []qwenEvent{
+						qwenEventContent{content: "你好 🌍"},
+						qwenEventRawToolCall{raw: "test"},
+						qwenEventContent{content: "مرحبا"},
+					},
+				},
+			},
+		},
+		{
+			desc: "arabic text handling",
+			steps: []step{
+				{
+					input:      "مرحبا بالعالم",
+					wantEvents: []qwenEvent{qwenEventContent{content: "مرحبا بالعالم"}},
+				},
+			},
+		},
+		{
+			desc: "emoji passthrough",
+			steps: []step{
+				{
+					input:      "✅",
+					wantEvents: []qwenEvent{qwenEventContent{content: "✅"}},
+				},
+			},
+		},
+		{
+			desc: "emoji after tool call",
+			steps: []step{
+				{
+					input: "<tool_call>test</tool_call>完成 ✅",
+					wantEvents: []qwenEvent{
+						qwenEventRawToolCall{raw: "test"},
+						qwenEventContent{content: "完成 ✅"},
+					},
+				},
+			},
+		},
+		{
+			desc: "unicode streaming with whitespace handling",
+			steps: []step{
+				{
+					input: "مرحبا",
+					wantEvents: []qwenEvent{
+						qwenEventContent{content: "مرحبا"},
+					},
+				},
+				{
+					input:      " \n",
+					wantEvents: []qwenEvent{},
+				},
+				{
+					input: "世界",
+					wantEvents: []qwenEvent{
+						qwenEventContent{content: " \n世界"},
+					},
+				},
+			},
+		},
+		{
+			desc: "non-breaking space withheld across chunks",
+			steps: []step{
+				{
+					input: "Hello\u00a0",
+					wantEvents: []qwenEvent{
+						qwenEventContent{content: "Hello"},
+					},
+				},
+				{
+					input: "world",
+					wantEvents: []qwenEvent{
+						qwenEventContent{content: "\u00a0world"},
+					},
+				},
+			},
+		},
+		{
+			desc: "ideographic space before partial tool",
+			steps: []step{
+				{
+					input: "Hello\u3000<tool",
+					wantEvents: []qwenEvent{
+						qwenEventContent{content: "Hello"},
+					},
+				},
+				{
+					input:      "_call>abc",
+					wantEvents: []qwenEvent{},
+				},
+				{
+					input: "</tool_call>def",
+					wantEvents: []qwenEvent{
+						qwenEventRawToolCall{raw: "abc"},
+						qwenEventContent{content: "def"},
+					},
+				},
+			},
+		},
+		{
+			desc: "ideographic space before partial tool fakeout",
+			steps: []step{
+				{
+					input: "Hello\u3000<tool",
+					wantEvents: []qwenEvent{
+						qwenEventContent{content: "Hello"},
+					},
+				},
+				{
+					input: "fakeout>abc",
+					wantEvents: []qwenEvent{
+						qwenEventContent{content: "\u3000<toolfakeout>abc"},
+					},
+				},
+			},
+		},
+		{
+			desc: "unicode with partial tool tag",
+			steps: []step{
+				{
+					input: "测试🎯 <to",
+					wantEvents: []qwenEvent{
+						qwenEventContent{content: "测试🎯"},
 					},
 				},
 			},
@@ -312,6 +458,62 @@ true
 				},
 			},
 		},
+		// regression test for <https://github.com/ollama/ollama/issues/12357>
+		{
+			name:  "ampersands in parameter values",
+			tools: []api.Tool{},
+			rawToolCall: `<function=exec>
+<parameter=command>
+ls && echo "done"
+</parameter>
+</function>`,
+			wantToolCall: api.ToolCall{
+				Function: api.ToolCallFunction{
+					Name: "exec",
+					Arguments: map[string]any{
+						"command": "ls && echo \"done\"",
+					},
+				},
+			},
+		},
+		{
+			name:  "angle brackets in parameter values",
+			tools: []api.Tool{},
+			rawToolCall: `<function=exec>
+<parameter=command>
+ls && echo "a > b and a < b"
+</parameter>
+</function>`,
+			wantToolCall: api.ToolCall{
+				Function: api.ToolCallFunction{
+					Name: "exec",
+					Arguments: map[string]any{
+						"command": "ls && echo \"a > b and a < b\"",
+					},
+				},
+			},
+		},
+		{
+			name:  "unicode in function names and parameters",
+			tools: []api.Tool{},
+			rawToolCall: `<function=获取天气>
+<parameter=城市>
+北京
+</parameter>
+<parameter=message>
+Hello! 你好! 🌟 مرحبا
+</parameter>
+</function>`,
+			wantToolCall: api.ToolCall{
+				Function: api.ToolCallFunction{
+					Name: "获取天气",
+					Arguments: map[string]any{
+						"城市":      "北京",
+						"message": "Hello! 你好! 🌟 مرحبا",
+					},
+				},
+			},
+		},
 	}
 
 	for i, step := range steps {
@@ -321,6 +523,42 @@ true
 		}
 		if !reflect.DeepEqual(gotToolCall, step.wantToolCall) {
 			t.Errorf("step %d (%s): got tool call %#v, want %#v", i, step.name, gotToolCall, step.wantToolCall)
+		}
+	}
+}
+
+func TestTrailingWhitespaceLenUnicode(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  int
+	}{
+		{
+			name:  "ascii space",
+			input: "Hello ",
+			want:  1,
+		},
+		{
+			name:  "non-breaking space",
+			input: "Hello\u00a0",
+			want:  2,
+		},
+		{
+			name:  "ideographic space",
+			input: "Hello\u3000",
+			want:  3,
+		},
+		{
+			name:  "multiple runes of whitespace",
+			input: "Hi\u00a0\u3000",
+			want:  5,
+		},
+	}
+
+	for _, tc := range cases {
+		got := trailingWhitespaceLen(tc.input)
+		if got != tc.want {
+			t.Errorf("%s: trailingWhitespaceLen(%q) = %d, want %d", tc.name, tc.input, got, tc.want)
 		}
 	}
 }
@@ -739,6 +977,21 @@ func TestQwenToolCallValueParsing(t *testing.T) {
 			raw:       "123",
 			want:      123, // Integer has higher precedence than string
 		},
+		{
+			desc:      "anyOf array or string - with array of objects",
+			paramType: api.PropertyType{"array", "string"},
+			raw:       `[{"content": "task 1", "status": "pending", "priority": "high", "id": "1"}, {"content": "task 2", "status": "completed", "priority": "low", "id": "2"}]`,
+			want: []any{
+				map[string]any{"content": "task 1", "status": "pending", "priority": "high", "id": "1"},
+				map[string]any{"content": "task 2", "status": "completed", "priority": "low", "id": "2"},
+			},
+		},
+		{
+			desc:      "anyOf array or string - with plain string",
+			paramType: api.PropertyType{"array", "string"},
+			raw:       "Error: could not load data",
+			want:      "Error: could not load data",
+		},
 	}
 
 	for _, tc := range cases {
@@ -798,6 +1051,19 @@ celsius
 </parameter>
 </function>`,
 		},
+		{
+			desc: "ampersands in parameter values",
+			raw: `<function=get_current_temperature>
+		<parameter=location>
+		San Francisco & San Jose
+		</parameter>
+		</function>`,
+			want: `<function name="get_current_temperature">
+		<parameter name="location">
+		San Francisco &amp; San Jose
+		</parameter>
+		</function>`,
+		},
 	}
 
 	for _, tc := range cases {
@@ -819,6 +1085,8 @@ func TestTrailingWhitespaceLen(t *testing.T) {
 		{desc: "trailing whitespace with newlines", s: "abc \n", want: 2},
 		{desc: "only whitespace", s: " \n  ", want: 4},
 		{desc: "leading whitespace doesn't count", s: " \n abc", want: 0},
+		{desc: "unicode with trailing space", s: "测试🎯 ", want: 1},
+		{desc: "unicode with trailing tab and newline", s: "مرحبا\t\n", want: 2},
 	}
 
 	for _, tc := range cases {
@@ -826,5 +1094,32 @@ func TestTrailingWhitespaceLen(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("got %d, want %d", got, tc.want)
 		}
+	}
+}
+
+func TestOverlapFunction(t *testing.T) {
+	cases := []struct {
+		desc  string
+		s     string
+		delim string
+		want  int
+	}{
+		{desc: "no overlap", s: "hello", delim: "<tool", want: 0},
+		{desc: "full overlap", s: "hello<tool", delim: "<tool>", want: 5},
+		{desc: "partial overlap", s: "hello<to", delim: "<tool>", want: 3},
+		{desc: "unicode with partial overlap", s: "测试🎯<to", delim: "<tool>", want: 3},
+		{desc: "unicode string with no overlap", s: "مرحبا", delim: "<tool>", want: 0},
+		{desc: "unicode at boundary", s: "世界<", delim: "<tool>", want: 1},
+		{desc: "unicode delimiter single rune", s: "hello🔧", delim: "🔧工具", want: len("🔧")},
+		{desc: "unicode delimiter multiple runes", s: "hello🔧工", delim: "🔧工具", want: len("🔧工")},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			got := overlap(tc.s, tc.delim)
+			if got != tc.want {
+				t.Errorf("overlap(%q, %q) = %d, want %d", tc.s, tc.delim, got, tc.want)
+			}
+		})
 	}
 }

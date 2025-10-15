@@ -16,14 +16,15 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"unsafe"
 
-	"github.com/ollama/ollama/envconfig"
 	"github.com/ollama/ollama/format"
+	"github.com/ollama/ollama/ml"
 )
 
 type cudaHandles struct {
@@ -797,34 +798,116 @@ func getVerboseState() C.uint16_t {
 
 // Given the list of GPUs this instantiation is targeted for,
 // figure out the visible devices environment variable
+//
+// If different libraries are detected, the first one is what we use
 func (l GpuInfoList) GetVisibleDevicesEnv() []string {
 	if len(l) == 0 {
 		return nil
 	}
-	vd := []string{}
-	// Only filter the AMD GPUs at this level, let all NVIDIA devices through
-	if tmp := rocmGetVisibleDevicesEnv(l); tmp != "" {
-		vd = append(vd, tmp)
+	res := []string{}
+	envVar := rocmGetVisibleDevicesEnv(l)
+	if envVar != "" {
+		res = append(res, envVar)
 	}
-	return vd
+	envVar = vkGetVisibleDevicesEnv(l)
+	if envVar != "" {
+		res = append(res, envVar)
+	}
+	return res
 }
 
-func GetSystemInfo() SystemInfo {
-	gpus := GetGPUInfo()
-	gpuMutex.Lock()
-	defer gpuMutex.Unlock()
-	discoveryErrors := []string{}
-	for _, err := range bootstrapErrors {
-		discoveryErrors = append(discoveryErrors, err.Error())
+func rocmGetVisibleDevicesEnv(gpuInfo []GpuInfo) string {
+	ids := []string{}
+	for _, info := range gpuInfo {
+		if info.Library != "ROCm" {
+			continue
+		}
+		// If the devices requires a numeric ID, for filtering purposes, we use the unfiltered ID number
+		if info.filterID != "" {
+			ids = append(ids, info.filterID)
+		} else {
+			ids = append(ids, info.ID)
+		}
 	}
+	if len(ids) == 0 {
+		return ""
+	}
+	envVar := "ROCR_VISIBLE_DEVICES="
+	if runtime.GOOS != "linux" {
+		envVar = "HIP_VISIBLE_DEVICES="
+	}
+	// There are 3 potential env vars to use to select GPUs.
+	// ROCR_VISIBLE_DEVICES supports UUID or numeric but does not work on Windows
+	// HIP_VISIBLE_DEVICES supports numeric IDs only
+	// GPU_DEVICE_ORDINAL supports numeric IDs only
+	return envVar + strings.Join(ids, ",")
+}
+
+func vkGetVisibleDevicesEnv(gpuInfo []GpuInfo) string {
+	ids := []string{}
+	for _, info := range gpuInfo {
+		if info.Library != "Vulkan" {
+			continue
+		}
+		if info.filterID != "" {
+			ids = append(ids, info.filterID)
+		} else {
+			ids = append(ids, info.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return ""
+	}
+	envVar := "GGML_VK_VISIBLE_DEVICES="
+	return envVar + strings.Join(ids, ",")
+}
+
+// GetSystemInfo returns the last cached state of the GPUs on the system
+func GetSystemInfo() SystemInfo {
+	deviceMu.Lock()
+	defer deviceMu.Unlock()
+	gpus := devInfoToInfoList(devices)
 	if len(gpus) == 1 && gpus[0].Library == "cpu" {
 		gpus = []GpuInfo{}
 	}
 
 	return SystemInfo{
-		System:          cpus[0],
-		GPUs:            gpus,
-		UnsupportedGPUs: unsupportedGPUs,
-		DiscoveryErrors: discoveryErrors,
+		System: CPUInfo{
+			CPUs:    GetCPUDetails(),
+			GpuInfo: GetCPUInfo(),
+		},
+		GPUs: gpus,
 	}
+}
+
+func cudaJetpack() string {
+	if runtime.GOARCH == "arm64" && runtime.GOOS == "linux" {
+		if CudaTegra != "" {
+			ver := strings.Split(CudaTegra, ".")
+			if len(ver) > 0 {
+				return "jetpack" + ver[0]
+			}
+		} else if data, err := os.ReadFile("/etc/nv_tegra_release"); err == nil {
+			r := regexp.MustCompile(` R(\d+) `)
+			m := r.FindSubmatch(data)
+			if len(m) != 2 {
+				slog.Info("Unexpected format for /etc/nv_tegra_release.  Set JETSON_JETPACK to select version")
+			} else {
+				if l4t, err := strconv.Atoi(string(m[1])); err == nil {
+					// Note: mapping from L4t -> JP is inconsistent (can't just subtract 30)
+					// https://developer.nvidia.com/embedded/jetpack-archive
+					switch l4t {
+					case 35:
+						return "jetpack5"
+					case 36:
+						return "jetpack6"
+					default:
+						// Newer Jetson systems use the SBSU runtime
+						slog.Debug("unrecognized L4T version", "nv_tegra_release", string(data))
+					}
+				}
+			}
+		}
+	}
+	return ""
 }
