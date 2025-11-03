@@ -1,18 +1,10 @@
-//go:build linux || windows
-
 package discover
 
-/*
-#cgo linux LDFLAGS: -lrt -lpthread -ldl -lstdc++ -lm
-#cgo windows LDFLAGS: -lpthread
-#cgo CPPFLAGS: -I${SRCDIR}/../ml/backend/ggml/ggml/include
-
-#include "gpu_info.h"
-*/
 import "C"
-
 import (
+	"context"
 	"fmt"
+	"github.com/ollama/ollama/envconfig"
 	"log/slog"
 	"os"
 	"path/filepath"
