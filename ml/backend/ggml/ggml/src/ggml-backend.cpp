@@ -368,14 +368,14 @@ enum ggml_status ggml_backend_graph_plan_compute(ggml_backend_t backend, ggml_ba
 }
 
 enum ggml_status ggml_backend_graph_compute(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
-    enum ggml_status err = ggml_backend_graph_compute_async(backend, cgraph);
+    enum ggml_status err = ggml_backend_graph_compute_async(backend, cgraph, -1);
     ggml_backend_synchronize(backend);
     return err;
 }
 
-enum ggml_status ggml_backend_graph_compute_async(ggml_backend_t backend, struct ggml_cgraph * cgraph) {
+enum ggml_status ggml_backend_graph_compute_async(ggml_backend_t backend, struct ggml_cgraph * cgraph, int batch_size) {
     GGML_ASSERT(backend);
-    return backend->iface.graph_compute(backend, cgraph);
+    return backend->iface.graph_compute(backend, cgraph, batch_size);
 }
 
 bool ggml_backend_supports_op(ggml_backend_t backend, const struct ggml_tensor * op) {
@@ -750,6 +750,8 @@ struct ggml_backend_sched {
 
     bool op_offload;
 
+    int batch_size; // a hint on the batch size to optimize processing, -1 to use heuristics
+
     int debug;
 
     // allocate buffers on attached ggml_backend_buffer_type_t's and during reservation
@@ -806,19 +808,6 @@ static char causes[GGML_DEFAULT_GRAPH_SIZE*16 + GGML_SCHED_MAX_SPLITS_DEBUG*GGML
 #define GET_CAUSE(node) ""
 #endif
 
-bool upgrade_prior_sycl = true;
-
-void init_sycl_env() {
-    char * s_sycl = getenv("OLLAMA_INTEL_IF_TYPE");
-    if (strcmp(s_sycl,"SYCL") || strcmp(s_sycl,"ONEAPI")) {
-        upgrade_prior_sycl = false;
-    }
-}
-
-bool upgrade_prior() {
-    return upgrade_prior_sycl;
-}
-
 // returns the backend that should be used for the node based on the current locations
 static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, struct ggml_tensor * tensor) {
     // assign pre-allocated nodes to their backend
@@ -860,15 +849,12 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
         // not an ideal solution
         if (tensor->op != GGML_OP_ROPE && src->buffer != NULL && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS) {
             int src_backend_id = ggml_backend_sched_backend_from_buffer(sched, src, tensor);
-            if (upgrade_prior()) {
-                // check if a backend with higher prio wants to offload the op
-                if (sched->op_offload && src_backend_id == sched->n_backends - 1 && ggml_backend_buffer_is_host(src->buffer)) {
-                    for (int b = 0; b < src_backend_id; b++) {
-                        if (ggml_backend_supports_op(sched->backends[b], tensor) && ggml_backend_offload_op(sched->backends[b], tensor)) {
-                            SET_CAUSE(tensor, "1.off");
-                            GGML_LOG_DEBUG("%s:%d ```````````````````````````````````````````` backend_id= %d\n", __func__, __LINE__, b);
-                            return b;
-                        }
+            // check if a backend with higher prio wants to offload the op
+            if (sched->op_offload && (sched->batch_size < 0 || sched->batch_size >= 32) && src_backend_id == sched->n_backends - 1 && ggml_backend_buffer_is_host(src->buffer)) {
+                for (int b = 0; b < src_backend_id; b++) {
+                    if (ggml_backend_supports_op(sched->backends[b], tensor) && ggml_backend_offload_op(sched->backends[b], tensor)) {
+                        SET_CAUSE(tensor, "1.off");
+                        return b;
                     }
                 }
             }
@@ -1600,7 +1586,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         }
 
         if (!sched->callback_eval) {
-            enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
+            enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph, sched->batch_size);
             if (ec != GGML_STATUS_SUCCESS) {
                 return ec;
             }
@@ -1622,7 +1608,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
                 struct ggml_cgraph gv = ggml_graph_view(&split->graph, j0, j1 + 1);
 
-                enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &gv);
+                enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &gv, sched->batch_size);
                 if (ec != GGML_STATUS_SUCCESS) {
                     return ec;
                 }
@@ -1673,7 +1659,6 @@ ggml_backend_sched_t ggml_backend_sched_new_ext(
 
     struct ggml_backend_sched * sched = (ggml_backend_sched *) calloc(1, sizeof(struct ggml_backend_sched));
 
-    init_sycl_env();
     const char * GGML_SCHED_DEBUG = getenv("GGML_SCHED_DEBUG");
     sched->debug = GGML_SCHED_DEBUG ? atoi(GGML_SCHED_DEBUG) : 0;
     sched->n_backends = n_backends;
@@ -1715,6 +1700,7 @@ ggml_backend_sched_t ggml_backend_sched_new_ext(
 
     sched->galloc = ggml_gallocr_new_n(sched->bufts, n_backends);
     sched->op_offload = op_offload;
+    sched->batch_size = -1;
     sched->alloc_buffers = alloc_buffers;
 
     ggml_backend_sched_reset(sched);
@@ -1749,6 +1735,10 @@ void ggml_backend_sched_free(ggml_backend_sched_t sched) {
     free(sched->graph.nodes);
     free(sched->graph.leafs);
     free(sched);
+}
+
+void ggml_backend_sched_set_batch_size(ggml_backend_sched_t sched, int batch_size) {
+    sched->batch_size = batch_size;
 }
 
 void ggml_backend_sched_reset(ggml_backend_sched_t sched) {
